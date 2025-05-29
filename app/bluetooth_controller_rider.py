@@ -1,0 +1,733 @@
+#!/usr/bin/env python3
+# coding=utf-8
+import os
+import struct
+import sys
+import time
+import threading
+import pygame  # type: ignore
+from xgo_toolkit import XGO  # type: ignore
+
+class BluetoothController_Rider(object):
+    
+    # Centralized button mapping for PlayStation controller
+    # Easy to modify for different controllers
+    BUTTON_MAPPING = {
+        'MIN_HEIGHT': 0,           # A/X button - Lower to minimum height
+        'BATTERY_CHECK': 1,         # B/Circle button - Check battery level
+        'MAX_HEIGHT': 2,          # Triangle button - Raise to maximum height
+        'ACTION_SWING': 3,          # Square button - Circular swing
+        'SPEED_DOWN': 4,            # L1 - Decrease speed
+        'SPEED_UP': 5,              # R1 - Increase speed
+        'RESET': 6,                 # Back/Select - Reset robot
+        'EMERGENCY_STOP': 7,        # Start - Emergency stop
+        'RESET_ALT': 10,            # Home button - Alternative reset
+        'HEIGHT_DOWN': 11,          # Left stick click - Decrease height
+        'HEIGHT_UP': 12,            # PS button - Increase height
+    }
+    
+    # Axis mapping for PlayStation controller
+    AXIS_MAPPING = {
+        'LEFT_STICK_X': 0,
+        'LEFT_STICK_Y': 1, 
+        'RIGHT_STICK_X': 3,         # Inverted with minus sign in code
+        'RIGHT_STICK_Y': 4,
+    }
+    
+    def __init__(self, robot, controller_id=0, debug=False):
+        self.__debug = debug
+        self.__controller_id = int(controller_id)
+        self.__controller_connected = False
+        self.__robot = robot
+        self.__running = False
+        
+        # Movement parameters
+        self.__speed_scale = 1.0
+        self.__turn_scale = 50  # Reduced from 100 for better control
+        self.__height = 85
+        self.__height_min = 75
+        self.__height_max = 115
+        
+        # Button states
+        self.__button_states = {}
+        
+        # Action state tracking
+        self.__action_in_progress = False
+        self.__action_end_time = 0
+        
+        # Read and display battery voltage if robot is connected
+        if self.__robot is not None:
+            self.__check_battery_voltage()
+        
+        # Initialize pygame with proper display setup
+        os.environ['SDL_VIDEODRIVER'] = 'dummy'  # Use dummy video driver for headless operation
+        pygame.init()  # type: ignore
+        pygame.joystick.init()  # type: ignore
+        
+        # Initialize a minimal display to prevent pygame errors
+        try:
+            pygame.display.set_mode((1, 1))
+        except:
+            # Fallback: create pygame surface without display
+            try:
+                pygame.display.init()
+            except:
+                pass
+        
+        self.STATE_OK = 0
+        self.STATE_NO_CONTROLLER = 1
+        self.STATE_DISCONNECT = 2
+        self.STATE_STOP = 3
+        
+        # Check for available controllers
+        print('Bluetooth Controllers Available:')
+        controller_count = pygame.joystick.get_count()
+        if controller_count == 0:
+            print('    No controllers found!')
+            self.__controller_connected = False
+            return
+            
+        for i in range(controller_count):
+            controller = pygame.joystick.Joystick(i)
+            print(f'    Controller {i}: {controller.get_name()}')
+        
+        # Initialize the specified controller
+        try:
+            if self.__controller_id < controller_count:
+                self.__controller = pygame.joystick.Joystick(self.__controller_id)
+                self.__controller.init()
+                self.__controller_connected = True
+                print(f'---Successfully connected to controller: {self.__controller.get_name()}---')
+            else:
+                print(f'---Controller {self.__controller_id} not found---')
+                self.__controller_connected = False
+        except Exception as e:
+            print(f'---Failed to connect to controller {self.__controller_id}: {e}---')
+            self.__controller_connected = False
+    
+    def is_connected(self):
+        return self.__controller_connected
+    
+    def __robot_reset(self):
+        """Reset robot to default state"""
+        self.__robot.rider_reset()
+        self.__height = 85
+        self.__speed_scale = 1.0
+        self.__turn_scale = 50  # Use consistent value
+        if self.__debug:
+            print("Robot reset to default state")
+    
+    def __check_battery_voltage(self):
+        """Read and display battery voltage"""
+        try:
+            print("=" * 50)
+            print("🔋 BATTERY STATUS CHECK")
+            print("=" * 50)
+            
+            # Try both battery reading methods for compatibility
+            battery_level = None
+            
+            # First try the rider-specific method
+            try:
+                battery_level = self.__robot.rider_read_battery()
+                print(f"📊 Battery Level (rider method): {battery_level}%")
+            except AttributeError:
+                # Fallback to standard method
+                try:
+                    battery_level = self.__robot.read_battery()
+                    print(f"📊 Battery Level (standard method): {battery_level}%")
+                except AttributeError:
+                    print("⚠️  Battery reading method not available")
+                    return
+            except Exception as e:
+                print(f"⚠️  Error reading battery with rider method: {e}")
+                # Try standard method as fallback
+                try:
+                    battery_level = self.__robot.read_battery()
+                    print(f"📊 Battery Level (fallback method): {battery_level}%")
+                except Exception as e2:
+                    print(f"❌ Failed to read battery: {e2}")
+                    return
+            
+            if battery_level is not None:
+                self.__display_battery_status(battery_level)
+            
+            print("=" * 50)
+            
+        except Exception as e:
+            print(f"❌ Battery check failed: {e}")
+    
+    def __display_battery_status(self, battery_level):
+        """Display battery status with appropriate warnings"""
+        try:
+            level = int(battery_level)
+            
+            if level <= 0:
+                print("❌ WARNING: Battery reading failed or robot not responding")
+                print("   • Check robot connection")
+                print("   • Ensure robot is powered on")
+                
+            elif level < 20:
+                print("🚨 CRITICAL: Battery very low!")
+                print(f"   • Current level: {level}%")
+                print("   • Please charge robot immediately")
+                print("   • Robot may shut down soon")
+                
+            elif level < 40:
+                print("⚠️  WARNING: Battery low")
+                print(f"   • Current level: {level}%")
+                print("   • Consider charging soon")
+                print("   • Reduced performance possible")
+                
+            elif level < 70:
+                print("📱 GOOD: Battery level adequate")
+                print(f"   • Current level: {level}%")
+                print("   • Normal operation expected")
+                
+            else:
+                print("✅ EXCELLENT: Battery level good!")
+                print(f"   • Current level: {level}%")
+                print("   • Full performance available")
+                
+            # Additional voltage estimate (rough calculation)
+            # Typical Li-ion: 3.0V (empty) to 4.2V (full) per cell
+            # Assuming 2S configuration: 6.0V - 8.4V range
+            estimated_voltage = 6.0 + (level / 100.0) * 2.4
+            print(f"   • Estimated voltage: ~{estimated_voltage:.1f}V")
+            
+        except (ValueError, TypeError):
+            print(f"⚠️  Invalid battery reading: {battery_level}")
+    
+    def __process_movement(self, left_stick_x, left_stick_y, right_stick_x, right_stick_y):
+        """Process analog stick movements for robot control"""
+        
+        # Don't process movement if action is in progress
+        if self.__action_in_progress and time.time() < self.__action_end_time:
+            return
+        elif self.__action_in_progress and time.time() >= self.__action_end_time:
+            self.__action_in_progress = False
+            if self.__debug:
+                print("Action completed, resuming movement control")
+        
+        # Dead zone to prevent drift
+        dead_zone = 0.1
+        
+        # Debug: Show all stick values before processing
+        if self.__debug and (abs(left_stick_x) > 0.05 or abs(left_stick_y) > 0.05 or 
+                            abs(right_stick_x) > 0.05 or abs(right_stick_y) > 0.05):
+            print(f"RAW STICKS - Left: ({left_stick_x:.3f}, {left_stick_y:.3f}) Right: ({right_stick_x:.3f}, {right_stick_y:.3f})")
+        
+        # Apply dead zone
+        if abs(left_stick_x) < dead_zone:
+            left_stick_x = 0
+        if abs(left_stick_y) < dead_zone:
+            left_stick_y = 0
+        if abs(right_stick_x) < dead_zone:
+            right_stick_x = 0
+        if abs(right_stick_y) < dead_zone:
+            right_stick_y = 0
+        
+        # Debug: Show processed stick values
+        if self.__debug and (abs(left_stick_x) > 0 or abs(left_stick_y) > 0 or 
+                            abs(right_stick_x) > 0 or abs(right_stick_y) > 0):
+            print(f"PROCESSED STICKS - Left: ({left_stick_x:.3f}, {left_stick_y:.3f}) Right: ({right_stick_x:.3f}, {right_stick_y:.3f})")
+        
+        # Left stick controls forward/backward movement
+        if abs(left_stick_y) > 0:
+            speed = -left_stick_y * self.__speed_scale  # Invert Y axis
+            # Limit speed to safe values
+            speed = max(-0.5, min(0.5, speed))
+            self.__robot.rider_move_x(speed)
+            if self.__debug:
+                print(f"Move: speed={speed:.2f}")
+        else:
+            self.__robot.rider_move_x(0)
+        
+        # Right stick controls turning - IMPROVED LOGIC WITH EXTENSIVE DEBUG
+        if abs(right_stick_x) > 0:
+            # Use a different approach for turning
+            turn_speed = right_stick_x * self.__turn_scale
+            
+            # Ensure minimum effective turn value
+            if abs(turn_speed) > 0 and abs(turn_speed) < 20:
+                turn_speed = 20 if turn_speed > 0 else -20
+            
+            if self.__debug:
+                print(f"🎮 TURN INPUT DETECTED!")
+                print(f"   Raw stick X: {right_stick_x:.3f}")
+                print(f"   Turn scale: {self.__turn_scale}")
+                print(f"   Calculated turn: {turn_speed:.1f}")
+                print(f"   Final turn command: {int(turn_speed)}")
+            
+            # Try multiple turn methods
+            turn_success = False
+            
+            # Method 1: rider_turn
+            try:
+                self.__robot.rider_turn(int(turn_speed))
+                turn_success = True
+                if self.__debug:
+                    print(f"✅ rider_turn({int(turn_speed)}) - SUCCESS")
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ rider_turn({int(turn_speed)}) - FAILED: {e}")
+            
+            # Method 2: rider_move_y (fallback)
+            if not turn_success:
+                try:
+                    turn_factor = right_stick_x * 0.3
+                    self.__robot.rider_move_y(turn_factor)
+                    turn_success = True
+                    if self.__debug:
+                        print(f"✅ rider_move_y({turn_factor:.2f}) - SUCCESS (fallback)")
+                except Exception as e:
+                    if self.__debug:
+                        print(f"❌ rider_move_y({turn_factor:.2f}) - FAILED: {e}")
+            
+            # Method 3: Try standard turn method
+            if not turn_success:
+                try:
+                    self.__robot.turn(int(turn_speed))
+                    turn_success = True
+                    if self.__debug:
+                        print(f"✅ turn({int(turn_speed)}) - SUCCESS (standard method)")
+                except Exception as e:
+                    if self.__debug:
+                        print(f"❌ turn({int(turn_speed)}) - FAILED: {e}")
+            
+            # Method 4: Try differential movement
+            if not turn_success:
+                try:
+                    # Create turning by differential leg movement
+                    turn_factor = right_stick_x * 0.2
+                    self.__robot.rider_move_x(0.1)  # Small forward
+                    if turn_factor > 0:
+                        # Turn right by moving left side faster
+                        self.__robot.rider_move_y(-abs(turn_factor))
+                    else:
+                        # Turn left by moving right side faster  
+                        self.__robot.rider_move_y(abs(turn_factor))
+                    turn_success = True
+                    if self.__debug:
+                        print(f"✅ Differential turn - SUCCESS")
+                except Exception as e:
+                    if self.__debug:
+                        print(f"❌ Differential turn - FAILED: {e}")
+            
+            if not turn_success:
+                if self.__debug:
+                    print("❌ ALL TURN METHODS FAILED!")
+                    
+        else:
+            # Stop all turn methods
+            try:
+                self.__robot.rider_turn(0)
+            except:
+                pass
+            try:
+                self.__robot.rider_move_y(0)
+            except:
+                pass
+            try:
+                self.__robot.turn(0)
+            except:
+                pass
+    
+    def __process_buttons(self, button_id, pressed):
+        """Process button presses"""
+        
+        if button_id not in self.__button_states:
+            self.__button_states[button_id] = False
+        
+        # Only process on button press (not release)
+        if pressed and not self.__button_states[button_id]:
+            self.__button_states[button_id] = True
+            
+            if self.__debug:
+                print(f"Button {button_id} pressed")
+            
+            # Button mappings using centralized mapping
+            if button_id == self.BUTTON_MAPPING['MIN_HEIGHT']:  # A/X button
+                # Lower robot to minimum height
+                self.__height = self.__height_min
+                self.__robot.rider_height(self.__height)
+                if self.__debug:
+                    print(f"Robot lowered to minimum height: {self.__height}")
+                    
+            elif button_id == self.BUTTON_MAPPING['BATTERY_CHECK']:  # B/Circle button
+                # Check battery level
+                self.__quick_battery_check()
+                
+            elif button_id == self.BUTTON_MAPPING['MAX_HEIGHT']:  # Triangle button
+                # Raise robot to maximum height
+                self.__height = self.__height_max
+                self.__robot.rider_height(self.__height)
+                if self.__debug:
+                    print(f"Robot raised to maximum height: {self.__height}")
+                    
+            elif button_id == self.BUTTON_MAPPING['ACTION_SWING']:  # Square button
+                # Stop current movement before action
+                self.__robot.rider_move_x(0)
+                self.__robot.rider_turn(0)
+                try:
+                    self.__robot.rider_move_y(0)
+                except:
+                    pass
+                    
+                self.__action_in_progress = True
+                self.__action_end_time = time.time() + 3.0  # 3 seconds for action
+                self.__robot.action(6)  # Circular swing
+                if self.__debug:
+                    print("Action: Circular swing")
+                    
+            elif button_id == self.BUTTON_MAPPING['SPEED_DOWN']:  # L1 button
+                # Decrease speed
+                self.__speed_scale = max(0.1, self.__speed_scale - 0.1)
+                print(f"Speed decreased to: {self.__speed_scale:.1f}")
+                    
+            elif button_id == self.BUTTON_MAPPING['SPEED_UP']:  # R1 button
+                # Increase speed
+                self.__speed_scale = min(2.0, self.__speed_scale + 0.1)
+                print(f"Speed increased to: {self.__speed_scale:.1f}")
+                    
+            elif button_id == self.BUTTON_MAPPING['RESET']:  # Back/Select button
+                # Reset robot
+                self.__robot_reset()
+                if self.__debug:
+                    print("Robot reset")
+                    
+            elif button_id == self.BUTTON_MAPPING['EMERGENCY_STOP']:  # Start button
+                # Emergency stop
+                self.__robot.rider_move_x(0)
+                self.__robot.rider_turn(0)
+                try:
+                    self.__robot.rider_move_y(0)
+                except:
+                    pass
+                self.__action_in_progress = False  # Clear any ongoing action
+                if self.__debug:
+                    print("Emergency stop")
+                    
+            elif button_id == self.BUTTON_MAPPING['RESET_ALT']:  # Home button
+                # Reset robot (alternative to button 6)
+                self.__robot_reset()
+                if self.__debug:
+                    print("Robot reset (Home button)")
+                    
+            elif button_id == self.BUTTON_MAPPING['HEIGHT_DOWN']:  # Left stick click
+                # Decrease height
+                self.__height = max(self.__height_min, self.__height - 5)
+                self.__robot.rider_height(self.__height)
+                if self.__debug:
+                    print(f"Height decreased to: {self.__height}")
+                    
+            elif button_id == self.BUTTON_MAPPING['HEIGHT_UP']:  # PS button
+                # Increase height
+                self.__height = min(self.__height_max, self.__height + 5)
+                self.__robot.rider_height(self.__height)
+                if self.__debug:
+                    print(f"Height increased to: {self.__height}")
+        
+        elif not pressed:
+            self.__button_states[button_id] = False
+    
+    def __process_dpad(self, hat_x, hat_y):
+        """Process D-pad input"""
+        if hat_x != 0 or hat_y != 0:
+            if self.__debug:
+                print(f"D-pad: x={hat_x}, y={hat_y}")
+            
+            # Stop current movement and actions
+            self.__robot.rider_move_x(0)
+            self.__robot.rider_turn(0)
+            try:
+                self.__robot.rider_move_y(0)
+            except:
+                pass
+            
+            # D-pad for quick movements - IMPROVED VALUES
+            if hat_y == 1:  # Up
+                self.__action_in_progress = True
+                self.__action_end_time = time.time() + 0.5  # Short action
+                self.__robot.rider_move_x(0.3)
+                time.sleep(0.3)
+                self.__robot.rider_move_x(0)
+            elif hat_y == -1:  # Down
+                self.__action_in_progress = True
+                self.__action_end_time = time.time() + 0.5  # Short action
+                self.__robot.rider_move_x(-0.3)
+                time.sleep(0.3)
+                self.__robot.rider_move_x(0)
+            elif hat_x == -1:  # Left - USING IMPROVED TURN LOGIC
+                self.__action_in_progress = True
+                self.__action_end_time = time.time() + 0.5  # Short action
+                try:
+                    self.__robot.rider_turn(30)  # Use working minimum value
+                    time.sleep(0.3)
+                    self.__robot.rider_turn(0)
+                except:
+                    # Fallback to movement-based turning
+                    try:
+                        self.__robot.rider_move_y(0.3)
+                        time.sleep(0.3)
+                        self.__robot.rider_move_y(0)
+                    except:
+                        if self.__debug:
+                            print("D-pad left turn failed")
+            elif hat_x == 1:  # Right - USING IMPROVED TURN LOGIC
+                self.__action_in_progress = True
+                self.__action_end_time = time.time() + 0.5  # Short action
+                try:
+                    self.__robot.rider_turn(-30)  # Use working minimum value
+                    time.sleep(0.3)
+                    self.__robot.rider_turn(0)
+                except:
+                    # Fallback to movement-based turning
+                    try:
+                        self.__robot.rider_move_y(-0.3)
+                        time.sleep(0.3)
+                        self.__robot.rider_move_y(0)
+                    except:
+                        if self.__debug:
+                            print("D-pad right turn failed")
+    
+    def start_control_loop(self):
+        """Start the main control loop"""
+        if not self.__controller_connected:
+            print("No controller connected!")
+            return self.STATE_NO_CONTROLLER
+        
+        self.__running = True
+        print("Starting Bluetooth controller input loop...")
+        print("Controls:")
+        print("  Left Stick Y: Forward/Backward")
+        print("  Right Stick X: Turn Left/Right")
+        print("  A/X: Lower to minimum height")
+        print("  B/Circle: Check battery level, show speed")
+        print("  Square: Circular swing")
+        print("  Triangle: Raise to maximum height")
+        print("  L1/L2: Decrease speed")
+        print("  R1/R2: Increase speed")
+        print("  Left Stick Click (Button 11): Decrease height")
+        print("  PS Button (Right Stick Click): Increase height")
+        print("  Home Button: Reset robot")
+        print("  Back/Select: Reset robot")
+        print("  Start: Emergency stop")
+        print("  D-pad: Quick movements")
+        
+        try:
+            clock = pygame.time.Clock()
+            
+            while self.__running:
+                # Process pygame events
+                for event in pygame.event.get():  # type: ignore
+                    if event.type == pygame.QUIT:  # type: ignore
+                        self.__running = False
+                        break
+                    
+                    elif event.type == pygame.JOYBUTTONDOWN:  # type: ignore
+                        self.__process_buttons(event.button, True)
+                    
+                    elif event.type == pygame.JOYBUTTONUP:  # type: ignore
+                        self.__process_buttons(event.button, False)
+                    
+                    elif event.type == pygame.JOYHATMOTION:  # type: ignore
+                        self.__process_dpad(event.value[0], event.value[1])
+                
+                if not self.__running:
+                    break
+                
+                # Get analog stick values
+                if self.__controller_connected:
+                    try:
+                        # Standard mapping first
+                        left_stick_x = self.__controller.get_axis(self.AXIS_MAPPING['LEFT_STICK_X'])
+                        left_stick_y = self.__controller.get_axis(self.AXIS_MAPPING['LEFT_STICK_Y'])
+                        right_stick_x = -self.__controller.get_axis(self.AXIS_MAPPING['RIGHT_STICK_X'])  # Inverted direction
+                        right_stick_y = self.__controller.get_axis(self.AXIS_MAPPING['RIGHT_STICK_Y'])
+                        
+                        # Test alternative mappings for right stick X
+                        if self.__debug and hasattr(self, '_debug_counter'):
+                            # Check if we have extra axes for right stick X
+                            if self.__controller.get_numaxes() > 4:
+                                alt_right_x_axis2 = self.__controller.get_axis(2) if self.__controller.get_numaxes() > 2 else 0
+                                alt_right_x_axis5 = self.__controller.get_axis(5) if self.__controller.get_numaxes() > 5 else 0
+                                
+                                # If current right stick X shows no movement but alternatives do
+                                if abs(right_stick_x) < 0.05 and (abs(alt_right_x_axis2) > 0.05 or abs(alt_right_x_axis5) > 0.05):
+                                    if abs(alt_right_x_axis2) > 0.05:
+                                        right_stick_x = alt_right_x_axis2
+                                        if self._debug_counter % 50 == 0:
+                                            print(f"🔄 FALLBACK: Using axis 2 for right stick X: {right_stick_x:.3f}")
+                                    elif abs(alt_right_x_axis5) > 0.05:
+                                        right_stick_x = alt_right_x_axis5
+                                        if self._debug_counter % 50 == 0:
+                                            print(f"🔄 FALLBACK: Using axis 5 for right stick X: {right_stick_x:.3f}")
+                        
+                        # Debug: Show controller info periodically
+                        if self.__debug and hasattr(self, '_debug_counter'):
+                            self._debug_counter += 1
+                            if self._debug_counter % 100 == 0:  # Every 2 seconds at 50Hz
+                                print(f"🎮 Controller Status: {self.__controller.get_name()}")
+                                print(f"   Axes count: {self.__controller.get_numaxes()}")
+                                print(f"   Current axes: [0]={left_stick_x:.3f} [1]={left_stick_y:.3f} [3]={right_stick_x:.3f} [4]={right_stick_y:.3f}")
+                                if self.__controller.get_numaxes() > 4:
+                                    extra_axes = []
+                                    used_axes = [self.AXIS_MAPPING['LEFT_STICK_X'], self.AXIS_MAPPING['LEFT_STICK_Y'], 
+                                                self.AXIS_MAPPING['RIGHT_STICK_X'], self.AXIS_MAPPING['RIGHT_STICK_Y']]
+                                    for i in range(self.__controller.get_numaxes()):
+                                        if i not in used_axes:  # Show non-stick axes
+                                            extra_axes.append(f"[{i}]={self.__controller.get_axis(i):.3f}")
+                                    if extra_axes:
+                                        print(f"   Other axes: {' '.join(extra_axes)}")
+                                    
+                                # Success message about right stick X
+                                if abs(self.__controller.get_axis(self.AXIS_MAPPING['RIGHT_STICK_X'])) > 0.05:
+                                    print(f"   ✅ Right stick X detected on axis {self.AXIS_MAPPING['RIGHT_STICK_X']}!")
+                        elif self.__debug and not hasattr(self, '_debug_counter'):
+                            self._debug_counter = 0
+                            print(f"🎮 Controller Connected: {self.__controller.get_name()}")
+                            print(f"   Total axes: {self.__controller.get_numaxes()}")
+                            print(f"   Total buttons: {self.__controller.get_numbuttons()}")
+                            print(f"   CORRECTED mapping: Axis {self.AXIS_MAPPING['LEFT_STICK_X']}=Left-X, {self.AXIS_MAPPING['LEFT_STICK_Y']}=Left-Y, {self.AXIS_MAPPING['RIGHT_STICK_X']}=Right-X, {self.AXIS_MAPPING['RIGHT_STICK_Y']}=Right-Y")
+                            print(f"   ✅ Using axis {self.AXIS_MAPPING['RIGHT_STICK_X']} for right stick X (PlayStation controller layout)")
+                        
+                        # Process movement
+                        self.__process_movement(left_stick_x, left_stick_y, right_stick_x, right_stick_y)
+                        
+                    except pygame.error:  # type: ignore
+                        print("Controller disconnected!")
+                        self.__controller_connected = False
+                        return self.STATE_DISCONNECT
+                
+                # Control loop frequency (50Hz)
+                clock.tick(50)
+                
+        except KeyboardInterrupt:
+            print("Control loop interrupted by user")
+        except Exception as e:
+            print(f"Error in control loop: {e}")
+        finally:
+            # Stop robot movement
+            if self.__controller_connected:
+                self.__robot.rider_move_x(0)
+                self.__robot.rider_turn(0)
+            self.__running = False
+            
+        return self.STATE_OK
+    
+    def stop(self):
+        """Stop the control loop"""
+        self.__running = False
+        if self.__controller_connected:
+            self.__robot.rider_move_x(0)
+            self.__robot.rider_turn(0)
+        print("Controller stopped")
+    
+    def cleanup(self):
+        """Clean up resources"""
+        self.stop()
+        if self.__controller_connected:
+            self.__controller.quit()
+        pygame.quit()  # type: ignore
+
+    def print_button_mapping(self):
+        """Print current button mapping for reference"""
+        print("\n" + "="*60)
+        print("CURRENT BUTTON MAPPING")
+        print("="*60)
+        for action, button_id in self.BUTTON_MAPPING.items():
+            print(f"  {action:<15}: Button {button_id}")
+        print("\nAxis Mapping:")
+        for axis, axis_id in self.AXIS_MAPPING.items():
+            invert_note = " (inverted)" if axis == 'RIGHT_STICK_X' else ""
+            print(f"  {axis:<15}: Axis {axis_id}{invert_note}")
+        print("="*60)
+
+    def __quick_battery_check(self):
+        """Quick battery check for button press"""
+        try:
+            # Try both battery reading methods for compatibility
+            battery_level = None
+            
+            # First try the rider-specific method
+            try:
+                battery_level = self.__robot.rider_read_battery()
+            except AttributeError:
+                # Fallback to standard method
+                try:
+                    battery_level = self.__robot.read_battery()
+                except AttributeError:
+                    print("⚠️  Battery reading method not available")
+                    return
+            except Exception as e:
+                # Try standard method as fallback
+                try:
+                    battery_level = self.__robot.read_battery()
+                except Exception as e2:
+                    print(f"❌ Failed to read battery: {e2}")
+                    return
+            
+            if battery_level is not None:
+                level = int(battery_level)
+                if level <= 0:
+                    print("❌ Battery reading failed or robot not responding")
+                elif level < 20:
+                    print(f"🚨 CRITICAL: Battery very low! ({level}%)")
+                elif level < 40:
+                    print(f"⚠️  WARNING: Battery low ({level}%)")
+                elif level < 70:
+                    print(f"📱 GOOD: Battery level adequate ({level}%)")
+                else:
+                    print(f"✅ EXCELLENT: Battery level good! ({level}%)")
+            
+        except Exception as e:
+            print(f"❌ Battery check failed: {e}")
+
+
+# Example usage
+if __name__ == "__main__":
+    import sys
+    
+    debug_mode = False
+    if len(sys.argv) > 1 and sys.argv[1] == "debug":
+        debug_mode = True
+    
+    print("🤖 Initializing XGO-RIDER robot...")
+    try:
+        robot = XGO(port='/dev/ttyS0', version="xgorider")
+        print("✅ Robot connected successfully!")
+    except Exception as e:
+        print(f"❌ Failed to connect to robot: {e}")
+        print("   • Check robot is powered on")
+        print("   • Check cable connection")
+        print("   • Try power cycling the robot")
+        sys.exit(1)
+    
+    print("\n🎮 Setting up Bluetooth controller...")
+    controller = BluetoothController_Rider(robot, controller_id=0, debug=debug_mode)
+    
+    if controller.is_connected():
+        # Show current button mapping if in debug mode
+        if debug_mode:
+            controller.print_button_mapping()
+        
+        try:
+            print("\n🚀 Starting control session...")
+            result = controller.start_control_loop()
+            if result == controller.STATE_DISCONNECT:
+                print("\n📱 Controller disconnected during operation")
+            elif result == controller.STATE_OK:
+                print("\n✅ Control session ended normally")
+        except KeyboardInterrupt:
+            print("\n🛑 Program interrupted by user")
+        finally:
+            print("\n🧹 Cleaning up...")
+            controller.cleanup()
+            robot.rider_reset()
+            print("✅ Cleanup complete!")
+    else:
+        print("❌ Failed to connect to Bluetooth controller")
+        print("   • Make sure your controller is paired and connected via Bluetooth")
+        print("   • Check if controller is already in use by another program")
+        print("   • Try reconnecting the controller") 
