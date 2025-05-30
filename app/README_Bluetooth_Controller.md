@@ -55,12 +55,12 @@ python3 test_bluetooth_controller.py
 Run the controller directly:
 ```bash
 cd /home/pi/Rider-Robot-Controller/app
-python3 bluetooth_controller_rider.py
+python3 rider_controller.py
 ```
 
 Add `debug` for verbose output:
 ```bash
-python3 bluetooth_controller_rider.py debug
+python3 rider_controller.py debug
 ```
 
 ### Option 2: Integrated App Mode
@@ -104,7 +104,7 @@ This mode allows you to:
 
 ### Speed and Sensitivity Settings
 
-You can modify these parameters in `bluetooth_controller_rider.py`:
+You can modify these parameters in `rider_controller.py`:
 
 ```python
 # Movement parameters
@@ -214,7 +214,7 @@ controller = BluetoothController_Rider(robot, controller_id=1, debug=False)
 The Bluetooth controller can be integrated with your existing applications by importing the `BluetoothController_Rider` class:
 
 ```python
-from bluetooth_controller_rider import BluetoothController_Rider
+from rider_controller import BluetoothController_Rider
 from xgolib import XGO
 
 robot = XGO(port='/dev/ttyAMA0', version="xgorider")
@@ -234,7 +234,7 @@ if controller.is_connected():
 
 ## Files Created
 
-- `bluetooth_controller_rider.py` - Main controller handler
+- `rider_controller.py` - Main controller handler
 - `setup_bluetooth_controller.sh` - Setup script
 - `test_bluetooth_controller.py` - Test script
 - `app_TwoCar_bluetooth.py` - Integrated app with Bluetooth support

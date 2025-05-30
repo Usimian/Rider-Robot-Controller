@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # coding=utf-8
+
+# This is a bluetooth controller for the Rider two wheel balancing robot
+# Marc Wester
+
 import os
-import struct
 import sys
 import time
-import threading
 import pygame  # type: ignore
 from xgo_toolkit import XGO  # type: ignore
+from rider_screen import RiderScreen
 
 class BluetoothController_Rider(object):
     
@@ -104,6 +107,24 @@ class BluetoothController_Rider(object):
         except Exception as e:
             print(f'---Failed to connect to controller {self.__controller_id}: {e}---')
             self.__controller_connected = False
+        
+        # Initialize LCD screen display if available
+        self.__screen = None
+        self.__screen_last_update = 0
+        self.__screen_update_interval = 2.0  # Update screen every 2 seconds
+        
+        if self.__controller_connected:
+            try:
+                print("📺 Initializing LCD screen display...")
+                self.__screen = RiderScreen(robot=self.__robot, debug=self.__debug)
+                self.__screen.update_status("Controller Connected")
+                self.__screen.update_speed(self.__speed_scale)
+                # Force initial display update
+                self.__screen.refresh_and_update_display()
+                print("✅ LCD screen initialized successfully")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize LCD screen: {e}")
+                self.__screen = None
     
     def is_connected(self):
         return self.__controller_connected
@@ -114,6 +135,12 @@ class BluetoothController_Rider(object):
         self.__height = 85
         self.__speed_scale = 1.0
         self.__turn_scale = 50  # Use consistent value
+        
+        # Update screen with reset values
+        if self.__screen:
+            self.__screen.update_speed(self.__speed_scale)
+            self.__screen.update_status("Reset Complete")
+            
         if self.__debug:
             print("Robot reset to default state")
     
@@ -384,11 +411,17 @@ class BluetoothController_Rider(object):
                 # Decrease speed
                 self.__speed_scale = max(0.1, self.__speed_scale - 0.1)
                 print(f"Speed decreased to: {self.__speed_scale:.1f}")
+                # Update screen with new speed
+                if self.__screen:
+                    self.__screen.update_speed(self.__speed_scale)
                     
             elif button_id == self.BUTTON_MAPPING['SPEED_UP']:  # R1 button
                 # Increase speed
                 self.__speed_scale = min(2.0, self.__speed_scale + 0.1)
                 print(f"Speed increased to: {self.__speed_scale:.1f}")
+                # Update screen with new speed
+                if self.__screen:
+                    self.__screen.update_speed(self.__speed_scale)
                     
             elif button_id == self.BUTTON_MAPPING['RESET']:  # Back/Select button
                 # Reset robot
@@ -600,6 +633,15 @@ class BluetoothController_Rider(object):
                         self.__controller_connected = False
                         return self.STATE_DISCONNECT
                 
+                # Update LCD screen periodically
+                if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
+                    try:
+                        self.__screen.refresh_and_update_display()
+                        self.__screen_last_update = time.time()
+                    except Exception as e:
+                        if self.__debug:
+                            print(f"Screen update error: {e}")
+                
                 # Control loop frequency (50Hz)
                 clock.tick(50)
                 
@@ -627,6 +669,14 @@ class BluetoothController_Rider(object):
     def cleanup(self):
         """Clean up resources"""
         self.stop()
+        
+        # Clean up LCD screen
+        if self.__screen:
+            try:
+                self.__screen.cleanup()
+            except Exception as e:
+                print(f"⚠️  Error turning off LCD screen: {e}")
+        
         if self.__controller_connected:
             self.__controller.quit()
         pygame.quit()  # type: ignore
@@ -687,8 +737,6 @@ class BluetoothController_Rider(object):
 
 # Example usage
 if __name__ == "__main__":
-    import sys
-    
     debug_mode = False
     if len(sys.argv) > 1 and sys.argv[1] == "debug":
         debug_mode = True
@@ -711,6 +759,9 @@ if __name__ == "__main__":
         # Show current button mapping if in debug mode
         if debug_mode:
             controller.print_button_mapping()
+        
+        print("📺 LCD screen will display battery level and speed settings")
+        print("🎮 Controller ready - use your gamepad to control the robot!")
         
         try:
             print("\n🚀 Starting control session...")
