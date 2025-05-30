@@ -152,19 +152,7 @@ class RiderScreen:
         
         # Battery percentage
         battery_color = self.__get_battery_color(self.__battery_level)
-        self.__draw_text(100, 125, f"{self.__battery_level}%", battery_color, self.__font_large)
-        
-        # Battery status text
-        if self.__battery_level >= 70:
-            status_text = "EXCELLENT"
-        elif self.__battery_level >= 40:
-            status_text = "GOOD"
-        elif self.__battery_level >= 20:
-            status_text = "LOW"
-        else:
-            status_text = "CRITICAL"
-        
-        self.__draw_text(150, 110, status_text, battery_color, self.__font_small)
+        self.__draw_text(100, 115, f"{self.__battery_level}%", battery_color, self.__font_large)
         
         # Speed section
         self.__draw_text(20, 170, "SPEED SETTING", self.__color_white, self.__font_medium)
@@ -173,7 +161,7 @@ class RiderScreen:
         self.__draw_speed_indicator(20, 200, self.__speed_scale)
         
         # Speed value
-        self.__draw_text(190, 190, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
+        self.__draw_text(190, 195, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
         
         # Update timestamp
         current_time = time.strftime("%H:%M")
