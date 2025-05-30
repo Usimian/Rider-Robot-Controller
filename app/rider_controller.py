@@ -22,9 +22,8 @@ class BluetoothController_Rider(object):
         'ACTION_SWING': 3,          # Square button - Circular swing
         'SPEED_DOWN': 4,            # L1 - Decrease speed
         'SPEED_UP': 5,              # R1 - Increase speed
-        'RESET': 6,                 # Back/Select - Reset robot
-        'EMERGENCY_STOP': 7,        # Start - Emergency stop
-        'RESET_ALT': 10,            # Home button - Alternative reset
+        'RESET': 9,                 # Back/Select - Reset robot
+        'EMERGENCY_STOP': 10,        # Home button - Emergency stop
         'HEIGHT_DOWN': 11,          # Left stick click - Decrease height
         'HEIGHT_UP': 12,            # PS button - Increase height
     }
@@ -62,10 +61,17 @@ class BluetoothController_Rider(object):
         if self.__robot is not None:
             self.__check_battery_voltage()
         
-        # Initialize pygame with proper display setup
+        # PYGAME 2.6.1 COMPATIBILITY FIXES
         os.environ['SDL_VIDEODRIVER'] = 'dummy'  # Use dummy video driver for headless operation
+        os.environ['SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS'] = '1'  # CRITICAL FIX for pygame 2.6.1
+        
         pygame.init()  # type: ignore
         pygame.joystick.init()  # type: ignore
+        
+        # PYGAME 2.6.1 FIX - Force refresh joystick detection
+        pygame.joystick.quit()
+        pygame.joystick.init()
+        time.sleep(0.2)  # Brief pause for detection
         
         # Initialize a minimal display to prevent pygame errors
         try:
@@ -99,6 +105,11 @@ class BluetoothController_Rider(object):
             if self.__controller_id < controller_count:
                 self.__controller = pygame.joystick.Joystick(self.__controller_id)
                 self.__controller.init()
+                
+                # PYGAME 2.6.1 FIX - Verify controller initialized properly
+                if not self.__controller.get_init():
+                    raise Exception("Controller failed to initialize")
+                
                 self.__controller_connected = True
                 print(f'---Successfully connected to controller: {self.__controller.get_name()}---')
             else:
@@ -192,29 +203,22 @@ class BluetoothController_Rider(object):
             if level <= 0:
                 print("❌ WARNING: Battery reading failed or robot not responding")
                 print("   • Check robot connection")
-                print("   • Ensure robot is powered on")
                 
             elif level < 20:
                 print("🚨 CRITICAL: Battery very low!")
                 print(f"   • Current level: {level}%")
-                print("   • Please charge robot immediately")
-                print("   • Robot may shut down soon")
                 
             elif level < 40:
                 print("⚠️  WARNING: Battery low")
                 print(f"   • Current level: {level}%")
-                print("   • Consider charging soon")
-                print("   • Reduced performance possible")
                 
             elif level < 70:
                 print("📱 GOOD: Battery level adequate")
                 print(f"   • Current level: {level}%")
-                print("   • Normal operation expected")
                 
             else:
                 print("✅ EXCELLENT: Battery level good!")
                 print(f"   • Current level: {level}%")
-                print("   • Full performance available")
                 
             # Additional voltage estimate (rough calculation)
             # Typical Li-ion: 3.0V (empty) to 4.2V (full) per cell
@@ -441,12 +445,6 @@ class BluetoothController_Rider(object):
                 if self.__debug:
                     print("Emergency stop")
                     
-            elif button_id == self.BUTTON_MAPPING['RESET_ALT']:  # Home button
-                # Reset robot (alternative to button 6)
-                self.__robot_reset()
-                if self.__debug:
-                    print("Robot reset (Home button)")
-                    
             elif button_id == self.BUTTON_MAPPING['HEIGHT_DOWN']:  # Left stick click
                 # Decrease height
                 self.__height = max(self.__height_min, self.__height - 5)
@@ -552,6 +550,9 @@ class BluetoothController_Rider(object):
             clock = pygame.time.Clock()
             
             while self.__running:
+                # PYGAME 2.6.1 FIX - Force event pump to ensure events are processed
+                pygame.event.pump()
+                
                 # Process pygame events
                 for event in pygame.event.get():  # type: ignore
                     if event.type == pygame.QUIT:  # type: ignore
@@ -573,6 +574,12 @@ class BluetoothController_Rider(object):
                 # Get analog stick values
                 if self.__controller_connected:
                     try:
+                        # PYGAME 2.6.1 FIX - Verify controller is still connected
+                        if not self.__controller.get_init():
+                            print("Controller disconnected!")
+                            self.__controller_connected = False
+                            return self.STATE_DISCONNECT
+                        
                         # Standard mapping first
                         left_stick_x = self.__controller.get_axis(self.AXIS_MAPPING['LEFT_STICK_X'])
                         left_stick_y = self.__controller.get_axis(self.AXIS_MAPPING['LEFT_STICK_Y'])

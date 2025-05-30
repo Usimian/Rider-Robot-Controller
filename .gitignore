@@ -173,8 +173,6 @@ ehthumbs.db
 Thumbs.db
 
 # Development Tools
-.vscode/
-.cursor/
 .idea/
 *.swp
 *.swo

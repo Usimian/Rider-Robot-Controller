@@ -164,7 +164,7 @@ class RiderScreen:
         else:
             status_text = "CRITICAL"
         
-        self.__draw_text(150, 130, status_text, battery_color, self.__font_small)
+        self.__draw_text(150, 110, status_text, battery_color, self.__font_small)
         
         # Speed section
         self.__draw_text(20, 170, "SPEED SETTING", self.__color_white, self.__font_medium)
@@ -173,11 +173,7 @@ class RiderScreen:
         self.__draw_speed_indicator(20, 200, self.__speed_scale)
         
         # Speed value
-        self.__draw_text(190, 203, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
-        
-        # Speed percentage
-        speed_percent = int((self.__speed_scale / 2.0) * 100)
-        self.__draw_text(250, 203, f"({speed_percent}%)", self.__color_blue, self.__font_small)
+        self.__draw_text(190, 190, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
         
         # Update timestamp
         current_time = time.strftime("%H:%M")

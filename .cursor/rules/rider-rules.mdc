@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+The program is written in Python
+The program runs on a raspberry pi CM4
+This is a controller for a two wheel balancing robot.
+The drive controller is embedded and accessed through xgo-toolkit.
+The xgo-toolkit is located at ~/xgo-toolkit.
+Any files created for testing purposes should begin with 'test_'
+All program files should be in the app folder
