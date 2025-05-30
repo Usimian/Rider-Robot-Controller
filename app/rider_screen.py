@@ -8,6 +8,7 @@
 import time
 import sys
 import os
+import pygame
 import xgoscreen.LCD_2inch as LCD_2inch
 from PIL import Image, ImageDraw, ImageFont
 from key import Button
@@ -27,6 +28,15 @@ class RiderScreen:
         self.__battery_level = 0
         self.__speed_scale = 1.0
         self.__robot_status = "Disconnected"
+        self.__controller_connected = False
+        
+        # Controller activity tracking for timeout-based detection
+        self.__controller_timeout = 10.0  # 10 seconds timeout
+        self.__last_controller_activity = 0
+        self.__controllers_initialized = []
+        
+        # Initialize pygame for controller detection
+        self.__setup_pygame()
         
         # Initialize LCD display
         self.__setup_display()
@@ -36,6 +46,112 @@ class RiderScreen:
         
         if self.__debug:
             print("RiderScreen initialized")
+    
+    def __setup_pygame(self):
+        """Initialize pygame for controller detection"""
+        try:
+            pygame.init()
+            pygame.joystick.init()
+            
+            # Initialize any detected controllers
+            controller_count = pygame.joystick.get_count()
+            self.__controllers_initialized = []
+            
+            for i in range(controller_count):
+                try:
+                    joystick = pygame.joystick.Joystick(i)
+                    joystick.init()
+                    self.__controllers_initialized.append(joystick)
+                    if self.__debug:
+                        print(f"Initialized controller {i}: {joystick.get_name()}")
+                except Exception as e:
+                    if self.__debug:
+                        print(f"Failed to initialize controller {i}: {e}")
+            
+            # Set initial activity time if controllers are present
+            if controller_count > 0:
+                self.__last_controller_activity = time.time()
+                self.__controller_connected = True
+                if self.__debug:
+                    print(f"Controllers detected: {controller_count}")
+            else:
+                self.__controller_connected = False
+                
+        except Exception as e:
+            print(f"Failed to initialize pygame: {e}")
+            self.__controller_connected = False
+    
+    def __check_controller_activity(self):
+        """Check for controller activity and update connection status based on timeout"""
+        try:
+            current_time = time.time()
+            activity_detected = False
+            
+            # Process pygame events to detect controller activity
+            for event in pygame.event.get():
+                if event.type in [pygame.JOYAXISMOTION, pygame.JOYBUTTONDOWN, 
+                                pygame.JOYBUTTONUP, pygame.JOYHATMOTION]:
+                    # Controller activity detected!
+                    self.__last_controller_activity = current_time
+                    activity_detected = True
+                    if self.__debug and not self.__controller_connected:
+                        print("🎮 Controller activity detected - marking as connected")
+                
+                elif event.type == pygame.JOYDEVICEADDED:
+                    # New controller connected
+                    try:
+                        controller_count = pygame.joystick.get_count()
+                        # Re-initialize controllers
+                        self.__controllers_initialized = []
+                        for i in range(controller_count):
+                            joystick = pygame.joystick.Joystick(i)
+                            joystick.init()
+                            self.__controllers_initialized.append(joystick)
+                        
+                        self.__last_controller_activity = current_time
+                        activity_detected = True
+                        if self.__debug:
+                            print(f"🟢 Controller connected: {controller_count} total")
+                    except Exception as e:
+                        if self.__debug:
+                            print(f"Error handling controller connection: {e}")
+                
+                elif event.type == pygame.JOYDEVICEREMOVED:
+                    if self.__debug:
+                        print("🔴 Controller disconnect event received")
+                    # Don't immediately mark as disconnected - let timeout handle it
+            
+            # Check if we have any controllers at all
+            controller_count = pygame.joystick.get_count()
+            
+            if controller_count == 0:
+                # No controllers detected by system
+                self.__controller_connected = False
+                if self.__debug and activity_detected:
+                    print("📊 No controllers detected by system")
+            else:
+                # We have controllers - check timeout
+                time_since_activity = current_time - self.__last_controller_activity
+                
+                if time_since_activity <= self.__controller_timeout:
+                    # Recent activity - controller is connected
+                    if not self.__controller_connected and self.__debug:
+                        print(f"✅ Controller marked as connected (activity {time_since_activity:.1f}s ago)")
+                    self.__controller_connected = True
+                else:
+                    # No recent activity - consider disconnected
+                    if self.__controller_connected and self.__debug:
+                        print(f"⏰ Controller timeout ({time_since_activity:.1f}s) - marking as disconnected")
+                    self.__controller_connected = False
+                
+        except Exception as e:
+            if self.__debug:
+                print(f"❌ Error checking controller activity: {e}")
+            # Fallback to simple count check
+            try:
+                self.__controller_connected = pygame.joystick.get_count() > 0
+            except:
+                self.__controller_connected = False
     
     def __setup_display(self):
         """Initialize the LCD display"""
@@ -60,6 +176,7 @@ class RiderScreen:
             self.__color_red = (255, 0, 0)
             self.__color_blue = (24, 47, 223)
             self.__color_bg = (15, 21, 46)
+            self.__color_gray = (128, 128, 128)
             
             # Show initial screen
             self.__display.ShowImage(self.__splash)
@@ -89,6 +206,62 @@ class RiderScreen:
             self.__draw.rectangle(((x, y), (x+w, y+h)), fill=color)
         else:
             self.__draw.rectangle(((x, y), (x+w, y+h)), outline=color, width=2)
+    
+    def __draw_circle(self, x, y, radius, color, filled=True):
+        """Helper function to draw circles"""
+        if filled:
+            self.__draw.ellipse(((x-radius, y-radius), (x+radius, y+radius)), fill=color)
+        else:
+            self.__draw.ellipse(((x-radius, y-radius), (x+radius, y+radius)), outline=color, width=2)
+    
+    def __draw_controller_icon(self, x, y):
+        """Draw a controller status icon with timeout awareness"""
+        current_time = time.time()
+        time_since_activity = current_time - self.__last_controller_activity
+        
+        # Determine icon color based on status and timeout
+        if not self.__controller_connected or pygame.joystick.get_count() == 0:
+            # Disconnected or no controllers
+            icon_color = self.__color_gray
+            status_text = "NO CTRL"
+            text_color = self.__color_gray
+        elif time_since_activity > self.__controller_timeout * 0.7:  # 70% of timeout (7 seconds)
+            # Warning - approaching timeout
+            icon_color = self.__color_yellow
+            status_text = "WARN"
+            text_color = self.__color_yellow
+        else:
+            # Connected and active
+            icon_color = self.__color_green
+            status_text = "CTRL"
+            text_color = self.__color_green
+        
+        # Controller body (rounded rectangle)
+        body_width = 24
+        body_height = 16
+        self.__draw_rect(x, y + 4, body_width, body_height, icon_color, filled=True)
+        
+        # Controller grips
+        self.__draw_rect(x - 2, y + 8, 4, 8, icon_color, filled=True)
+        self.__draw_rect(x + body_width - 2, y + 8, 4, 8, icon_color, filled=True)
+        
+        # D-pad (left side)
+        self.__draw_rect(x + 4, y + 8, 6, 2, self.__color_bg, filled=True)
+        self.__draw_rect(x + 6, y + 6, 2, 6, self.__color_bg, filled=True)
+        
+        # Action buttons (right side)
+        self.__draw_circle(x + 16, y + 8, 1, self.__color_bg, filled=True)
+        self.__draw_circle(x + 19, y + 11, 1, self.__color_bg, filled=True)
+        
+        # Status text with timeout info
+        self.__draw_text(x + 30, y + 8, status_text, text_color, self.__font_small)
+        
+        # Show timeout countdown when warning
+        if self.__controller_connected and time_since_activity > self.__controller_timeout * 0.5:
+            remaining = self.__controller_timeout - time_since_activity
+            if remaining > 0:
+                timeout_text = f"{remaining:.0f}s"
+                self.__draw_text(x + 70, y + 8, timeout_text, text_color, self.__font_small)
     
     def __get_battery_color(self, battery_level):
         """Get appropriate color based on battery level"""
@@ -137,8 +310,11 @@ class RiderScreen:
         # Clear screen
         self.__clear_screen()
         
-        # Title
-        self.__draw_text(85, 20, "RIDER ROBOT", self.__color_white, self.__font_large)
+        # Controller status icon (upper left)
+        self.__draw_controller_icon(10, 10)
+        
+        # Title (moved slightly right to accommodate controller icon)
+        self.__draw_text(110, 20, "RIDER ROBOT", self.__color_white, self.__font_large)
         
         # Status line
         status_color = self.__color_green if self.__robot_status == "Connected" else self.__color_red
@@ -188,6 +364,10 @@ class RiderScreen:
         if self.__debug:
             print(f"Status updated: {self.__robot_status}")
     
+    def get_controller_status(self):
+        """Get the current controller connection status"""
+        return self.__controller_connected
+    
     def refresh_from_robot(self):
         """Refresh data from the robot if available"""
         if self.__robot is not None:
@@ -220,6 +400,7 @@ class RiderScreen:
     
     def refresh_and_update_display(self):
         """Refresh data from robot and update the display - for integration use"""
+        self.__check_controller_activity()
         self.refresh_from_robot()
         self.__update_display()
     
@@ -229,9 +410,17 @@ class RiderScreen:
         print("Starting Rider Screen Display...")
         print("Press A button to exit")
         
+        controller_check_interval = 0.3  # Check controller every 0.3 seconds 
+        last_controller_check = 0
+        
         try:
             while self.__running:
                 current_time = time.time()
+                
+                # Check for controller events regularly
+                if current_time - last_controller_check >= controller_check_interval:
+                    self.__check_controller_activity()
+                    last_controller_check = current_time
                 
                 # Update display at regular intervals
                 if current_time - self.__last_update >= self.__update_interval:
@@ -244,7 +433,7 @@ class RiderScreen:
                     print("Exit button pressed")
                     break
                 
-                # Small delay to prevent excessive CPU usage
+                # Reasonable delay to prevent excessive CPU usage
                 time.sleep(0.1)
                 
         except KeyboardInterrupt:
@@ -262,6 +451,9 @@ class RiderScreen:
     def cleanup(self):
         """Clean up resources"""
         try:
+            # Clean up pygame
+            pygame.quit()
+            
             # Turn off the display properly
             print("Turning off LCD display...")
             

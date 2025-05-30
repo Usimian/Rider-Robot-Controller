@@ -57,6 +57,11 @@ class BluetoothController_Rider(object):
         self.__action_in_progress = False
         self.__action_end_time = 0
         
+        # Controller activity tracking for robust connection monitoring
+        self.__controller_timeout = 10.0  # 10 seconds timeout
+        self.__last_controller_activity = 0
+        self.__controllers_initialized = []
+        
         # Read and display battery voltage if robot is connected
         if self.__robot is not None:
             self.__check_battery_voltage()
@@ -65,59 +70,13 @@ class BluetoothController_Rider(object):
         os.environ['SDL_VIDEODRIVER'] = 'dummy'  # Use dummy video driver for headless operation
         os.environ['SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS'] = '1'  # CRITICAL FIX for pygame 2.6.1
         
-        pygame.init()  # type: ignore
-        pygame.joystick.init()  # type: ignore
-        
-        # PYGAME 2.6.1 FIX - Force refresh joystick detection
-        pygame.joystick.quit()
-        pygame.joystick.init()
-        time.sleep(0.2)  # Brief pause for detection
-        
-        # Initialize a minimal display to prevent pygame errors
-        try:
-            pygame.display.set_mode((1, 1))
-        except:
-            # Fallback: create pygame surface without display
-            try:
-                pygame.display.init()
-            except:
-                pass
+        # Initialize pygame with improved controller detection
+        self.__setup_pygame()
         
         self.STATE_OK = 0
         self.STATE_NO_CONTROLLER = 1
         self.STATE_DISCONNECT = 2
         self.STATE_STOP = 3
-        
-        # Check for available controllers
-        print('Bluetooth Controllers Available:')
-        controller_count = pygame.joystick.get_count()
-        if controller_count == 0:
-            print('    No controllers found!')
-            self.__controller_connected = False
-            return
-            
-        for i in range(controller_count):
-            controller = pygame.joystick.Joystick(i)
-            print(f'    Controller {i}: {controller.get_name()}')
-        
-        # Initialize the specified controller
-        try:
-            if self.__controller_id < controller_count:
-                self.__controller = pygame.joystick.Joystick(self.__controller_id)
-                self.__controller.init()
-                
-                # PYGAME 2.6.1 FIX - Verify controller initialized properly
-                if not self.__controller.get_init():
-                    raise Exception("Controller failed to initialize")
-                
-                self.__controller_connected = True
-                print(f'---Successfully connected to controller: {self.__controller.get_name()}---')
-            else:
-                print(f'---Controller {self.__controller_id} not found---')
-                self.__controller_connected = False
-        except Exception as e:
-            print(f'---Failed to connect to controller {self.__controller_id}: {e}---')
-            self.__controller_connected = False
         
         # Initialize LCD screen display if available
         self.__screen = None
@@ -136,6 +95,161 @@ class BluetoothController_Rider(object):
             except Exception as e:
                 print(f"⚠️  Failed to initialize LCD screen: {e}")
                 self.__screen = None
+    
+    def __setup_pygame(self):
+        """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
+        try:
+            pygame.init()  # type: ignore
+            pygame.joystick.init()  # type: ignore
+            
+            # PYGAME 2.6.1 FIX - Force refresh joystick detection
+            pygame.joystick.quit()
+            pygame.joystick.init()
+            time.sleep(0.2)  # Brief pause for detection
+            
+            # Initialize a minimal display to prevent pygame errors
+            try:
+                pygame.display.set_mode((1, 1))
+            except:
+                # Fallback: create pygame surface without display
+                try:
+                    pygame.display.init()
+                except:
+                    pass
+            
+            # Initialize any detected controllers
+            controller_count = pygame.joystick.get_count()
+            self.__controllers_initialized = []
+            
+            print('Bluetooth Controllers Available:')
+            if controller_count == 0:
+                print('    No controllers found!')
+                self.__controller_connected = False
+                return
+                
+            for i in range(controller_count):
+                controller = pygame.joystick.Joystick(i)
+                print(f'    Controller {i}: {controller.get_name()}')
+            
+            # Initialize the specified controller and any others for monitoring
+            for i in range(controller_count):
+                try:
+                    joystick = pygame.joystick.Joystick(i)
+                    joystick.init()
+                    
+                    # PYGAME 2.6.1 FIX - Verify controller initialized properly
+                    if not joystick.get_init():
+                        raise Exception("Controller failed to initialize")
+                    
+                    self.__controllers_initialized.append(joystick)
+                    
+                    # Set the main controller
+                    if i == self.__controller_id:
+                        self.__controller = joystick
+                        self.__controller_connected = True
+                        print(f'---Successfully connected to controller: {joystick.get_name()}---')
+                    
+                    if self.__debug:
+                        print(f"Initialized controller {i}: {joystick.get_name()}")
+                        
+                except Exception as e:
+                    if self.__debug:
+                        print(f"Failed to initialize controller {i}: {e}")
+            
+            # Set initial activity time if controllers are present
+            if controller_count > 0 and self.__controller_connected:
+                self.__last_controller_activity = time.time()
+                if self.__debug:
+                    print(f"Controllers detected: {controller_count}")
+            else:
+                if self.__controller_id >= controller_count:
+                    print(f'---Controller {self.__controller_id} not found---')
+                self.__controller_connected = False
+                
+        except Exception as e:
+            print(f'---Failed to initialize pygame: {e}---')
+            self.__controller_connected = False
+    
+    def __check_controller_activity(self):
+        """Check for controller activity and update connection status (integrated from rider_screen.py)"""
+        try:
+            current_time = time.time()
+            activity_detected = False
+            
+            # Process pygame events to detect controller activity
+            for event in pygame.event.get():
+                if event.type in [pygame.JOYAXISMOTION, pygame.JOYBUTTONDOWN, 
+                                pygame.JOYBUTTONUP, pygame.JOYHATMOTION]:
+                    # Controller activity detected!
+                    self.__last_controller_activity = current_time
+                    activity_detected = True
+                    if self.__debug and not self.__controller_connected:
+                        print("🎮 Controller activity detected - marking as connected")
+                
+                elif event.type == pygame.JOYDEVICEADDED:
+                    # New controller connected
+                    try:
+                        controller_count = pygame.joystick.get_count()
+                        # Re-initialize controllers
+                        self.__controllers_initialized = []
+                        for i in range(controller_count):
+                            joystick = pygame.joystick.Joystick(i)
+                            joystick.init()
+                            self.__controllers_initialized.append(joystick)
+                            
+                            # Update main controller if needed
+                            if i == self.__controller_id:
+                                self.__controller = joystick
+                        
+                        self.__last_controller_activity = current_time
+                        activity_detected = True
+                        self.__controller_connected = True
+                        if self.__debug:
+                            print(f"🟢 Controller connected: {controller_count} total")
+                    except Exception as e:
+                        if self.__debug:
+                            print(f"Error handling controller connection: {e}")
+                
+                elif event.type == pygame.JOYDEVICEREMOVED:
+                    if self.__debug:
+                        print("🔴 Controller disconnect event received")
+                    # Don't immediately mark as disconnected - let timeout handle it
+            
+            # Check if we have any controllers at all
+            controller_count = pygame.joystick.get_count()
+            
+            if controller_count == 0:
+                # No controllers detected by system
+                if self.__controller_connected and self.__debug:
+                    print("📊 No controllers detected by system - marking as disconnected")
+                self.__controller_connected = False
+            else:
+                # We have controllers - check timeout
+                time_since_activity = current_time - self.__last_controller_activity
+                
+                if time_since_activity <= self.__controller_timeout:
+                    # Recent activity - controller is connected
+                    if not self.__controller_connected and self.__debug:
+                        print(f"✅ Controller marked as connected (activity {time_since_activity:.1f}s ago)")
+                    self.__controller_connected = True
+                else:
+                    # No recent activity - consider disconnected
+                    if self.__controller_connected and self.__debug:
+                        print(f"⏰ Controller timeout ({time_since_activity:.1f}s) - marking as disconnected")
+                    self.__controller_connected = False
+                    
+                    # Update screen with disconnection status
+                    if self.__screen:
+                        self.__screen.update_status("Controller Timeout")
+                
+        except Exception as e:
+            if self.__debug:
+                print(f"❌ Error checking controller activity: {e}")
+            # Fallback to simple count check
+            try:
+                self.__controller_connected = pygame.joystick.get_count() > 0
+            except:
+                self.__controller_connected = False
     
     def is_connected(self):
         return self.__controller_connected
@@ -546,45 +660,145 @@ class BluetoothController_Rider(object):
         print("  Start: Emergency stop")
         print("  D-pad: Quick movements")
         
+        # Initialize debug counter for periodic status updates
+        if self.__debug:
+            self._debug_counter = 0
+        
         try:
             clock = pygame.time.Clock()
+            controller_check_interval = 0.3  # Check controller every 0.3 seconds
+            last_controller_check = 0
             
             while self.__running:
-                # PYGAME 2.6.1 FIX - Force event pump to ensure events are processed
-                pygame.event.pump()
+                current_time = time.time()
                 
-                # Process pygame events
-                for event in pygame.event.get():  # type: ignore
-                    if event.type == pygame.QUIT:  # type: ignore
-                        self.__running = False
-                        break
+                # IMPROVED CONTROLLER MONITORING - Check for controller events regularly
+                if current_time - last_controller_check >= controller_check_interval:
+                    self.__check_controller_activity()
+                    last_controller_check = current_time
                     
-                    elif event.type == pygame.JOYBUTTONDOWN:  # type: ignore
-                        self.__process_buttons(event.button, True)
+                    # If controller disconnected, handle gracefully by waiting for reconnection
+                    if not self.__controller_connected:
+                        # Stop robot movement immediately for safety
+                        self.__robot.rider_move_x(0)
+                        self.__robot.rider_turn(0)
+                        try:
+                            self.__robot.rider_move_y(0)
+                        except:
+                            pass
+                        
+                        # Update screen status
+                        if self.__screen:
+                            self.__screen.update_status("Waiting for Controller")
+                        
+                        # Enter waiting mode instead of exiting
+                        print("🔴 Controller disconnected - waiting for reconnection...")
+                        print("   Move any stick or press any button to reconnect")
+                        print("   Press Ctrl+C to exit")
+                        
+                        # Wait for controller to reconnect
+                        reconnect_timeout = 60.0  # Wait up to 60 seconds for reconnection
+                        wait_start_time = current_time
+                        wait_check_interval = 1.0  # Check every second while waiting
+                        last_wait_check = current_time
+                        
+                        while not self.__controller_connected and self.__running:
+                            wait_current_time = time.time()
+                            
+                            # Check for reconnection every second
+                            if wait_current_time - last_wait_check >= wait_check_interval:
+                                self.__check_controller_activity()
+                                last_wait_check = wait_current_time
+                                
+                                # Show waiting message periodically
+                                if int(wait_current_time - wait_start_time) % 10 == 0:
+                                    remaining = reconnect_timeout - (wait_current_time - wait_start_time)
+                                    if remaining > 0:
+                                        print(f"⏰ Still waiting for controller... ({remaining:.0f}s remaining)")
+                                    
+                                # Update screen status
+                                if self.__screen:
+                                    try:
+                                        self.__screen.refresh_and_update_display()
+                                    except Exception as e:
+                                        if self.__debug:
+                                            print(f"Screen update error while waiting: {e}")
+                            
+                            # Check if we've been waiting too long
+                            if wait_current_time - wait_start_time > reconnect_timeout:
+                                print("⏰ Controller reconnection timeout - exiting")
+                                return self.STATE_DISCONNECT
+                            
+                            # Sleep briefly to prevent excessive CPU usage
+                            time.sleep(0.1)
+                        
+                        # If we get here, controller was reconnected or user stopped
+                        if self.__controller_connected:
+                            print("✅ Controller reconnected!")
+                            if self.__screen:
+                                self.__screen.update_status("Controller Reconnected")
+                            # Reset last activity time
+                            self.__last_controller_activity = time.time()
+                            # Continue with normal loop
+                        else:
+                            # User stopped the program
+                            break
+                
+                # Only process controller input if connected
+                if not self.__controller_connected:
+                    # Skip processing if not connected (we're in waiting mode above)
+                    time.sleep(0.1)
+                    continue
+                
+                # Process pygame events for buttons and movement (only if connected)
+                if self.__controller_connected:
+                    # PYGAME 2.6.1 FIX - Force event pump to ensure events are processed
+                    pygame.event.pump()
                     
-                    elif event.type == pygame.JOYBUTTONUP:  # type: ignore
-                        self.__process_buttons(event.button, False)
-                    
-                    elif event.type == pygame.JOYHATMOTION:  # type: ignore
-                        self.__process_dpad(event.value[0], event.value[1])
+                    # Process button events specifically 
+                    for event in pygame.event.get():  # type: ignore
+                        if event.type == pygame.QUIT:  # type: ignore
+                            self.__running = False
+                            break
+                        
+                        elif event.type == pygame.JOYBUTTONDOWN:  # type: ignore
+                            self.__process_buttons(event.button, True)
+                            # Mark activity
+                            self.__last_controller_activity = current_time
+                        
+                        elif event.type == pygame.JOYBUTTONUP:  # type: ignore
+                            self.__process_buttons(event.button, False)
+                            # Mark activity
+                            self.__last_controller_activity = current_time
+                        
+                        elif event.type == pygame.JOYHATMOTION:  # type: ignore
+                            self.__process_dpad(event.value[0], event.value[1])
+                            # Mark activity
+                            self.__last_controller_activity = current_time
                 
                 if not self.__running:
                     break
                 
-                # Get analog stick values
+                # Get analog stick values (only if connected)
                 if self.__controller_connected:
                     try:
                         # PYGAME 2.6.1 FIX - Verify controller is still connected
                         if not self.__controller.get_init():
-                            print("Controller disconnected!")
+                            print("🔴 Controller hardware disconnected!")
                             self.__controller_connected = False
-                            return self.STATE_DISCONNECT
+                            # Don't return here - let the next iteration handle it in waiting mode
+                            continue
                         
                         # Standard mapping first
                         left_stick_x = self.__controller.get_axis(self.AXIS_MAPPING['LEFT_STICK_X'])
                         left_stick_y = self.__controller.get_axis(self.AXIS_MAPPING['LEFT_STICK_Y'])
                         right_stick_x = -self.__controller.get_axis(self.AXIS_MAPPING['RIGHT_STICK_X'])  # Inverted direction
                         right_stick_y = self.__controller.get_axis(self.AXIS_MAPPING['RIGHT_STICK_Y'])
+                        
+                        # Mark activity if sticks are being used
+                        if (abs(left_stick_x) > 0.05 or abs(left_stick_y) > 0.05 or 
+                            abs(right_stick_x) > 0.05 or abs(right_stick_y) > 0.05):
+                            self.__last_controller_activity = current_time
                         
                         # Test alternative mappings for right stick X
                         if self.__debug and hasattr(self, '_debug_counter'):
@@ -608,7 +822,9 @@ class BluetoothController_Rider(object):
                         if self.__debug and hasattr(self, '_debug_counter'):
                             self._debug_counter += 1
                             if self._debug_counter % 100 == 0:  # Every 2 seconds at 50Hz
+                                time_since_activity = current_time - self.__last_controller_activity
                                 print(f"🎮 Controller Status: {self.__controller.get_name()}")
+                                print(f"   Last activity: {time_since_activity:.1f}s ago")
                                 print(f"   Axes count: {self.__controller.get_numaxes()}")
                                 print(f"   Current axes: [0]={left_stick_x:.3f} [1]={left_stick_y:.3f} [3]={right_stick_x:.3f} [4]={right_stick_y:.3f}")
                                 if self.__controller.get_numaxes() > 4:
@@ -620,7 +836,7 @@ class BluetoothController_Rider(object):
                                             extra_axes.append(f"[{i}]={self.__controller.get_axis(i):.3f}")
                                     if extra_axes:
                                         print(f"   Other axes: {' '.join(extra_axes)}")
-                                    
+                                        
                                 # Success message about right stick X
                                 if abs(self.__controller.get_axis(self.AXIS_MAPPING['RIGHT_STICK_X'])) > 0.05:
                                     print(f"   ✅ Right stick X detected on axis {self.AXIS_MAPPING['RIGHT_STICK_X']}!")
@@ -636,9 +852,10 @@ class BluetoothController_Rider(object):
                         self.__process_movement(left_stick_x, left_stick_y, right_stick_x, right_stick_y)
                         
                     except pygame.error:  # type: ignore
-                        print("Controller disconnected!")
+                        print("🔴 Controller hardware disconnected!")
                         self.__controller_connected = False
-                        return self.STATE_DISCONNECT
+                        # Don't return here - let the next iteration handle it in waiting mode
+                        continue
                 
                 # Update LCD screen periodically
                 if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
@@ -768,7 +985,7 @@ if __name__ == "__main__":
             controller.print_button_mapping()
         
         print("📺 LCD screen will display battery level and speed settings")
-        print("🎮 Controller ready - use your gamepad to control the robot!")
+        print("�� Controller ready - use your gamepad to control the robot!")
         
         try:
             print("\n🚀 Starting control session...")
