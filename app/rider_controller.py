@@ -653,7 +653,7 @@ class BluetoothController_Rider(object):
         print("  Triangle: Raise to maximum height")
         print("  L1/L2: Decrease speed")
         print("  R1/R2: Increase speed")
-        print("  Left Stick Click (Button 11): Decrease height")
+        print("  Left Stick Click: Decrease height")
         print("  PS Button (Right Stick Click): Increase height")
         print("  Home Button: Reset robot")
         print("  Back/Select: Reset robot")
@@ -696,8 +696,7 @@ class BluetoothController_Rider(object):
                         print("   Move any stick or press any button to reconnect")
                         print("   Press Ctrl+C to exit")
                         
-                        # Wait for controller to reconnect
-                        reconnect_timeout = 60.0  # Wait up to 60 seconds for reconnection
+                        # Wait for controller to reconnect indefinitely
                         wait_start_time = current_time
                         wait_check_interval = 1.0  # Check every second while waiting
                         last_wait_check = current_time
@@ -710,11 +709,10 @@ class BluetoothController_Rider(object):
                                 self.__check_controller_activity()
                                 last_wait_check = wait_current_time
                                 
-                                # Show waiting message periodically
-                                if int(wait_current_time - wait_start_time) % 10 == 0:
-                                    remaining = reconnect_timeout - (wait_current_time - wait_start_time)
-                                    if remaining > 0:
-                                        print(f"⏰ Still waiting for controller... ({remaining:.0f}s remaining)")
+                                # Show waiting message periodically (every 30 seconds)
+                                wait_duration = wait_current_time - wait_start_time
+                                if int(wait_duration) % 30 == 0 and int(wait_duration) > 0:
+                                    print(f"⏰ Still waiting for controller... ({int(wait_duration)}s elapsed)")
                                     
                                 # Update screen status
                                 if self.__screen:
@@ -723,11 +721,6 @@ class BluetoothController_Rider(object):
                                     except Exception as e:
                                         if self.__debug:
                                             print(f"Screen update error while waiting: {e}")
-                            
-                            # Check if we've been waiting too long
-                            if wait_current_time - wait_start_time > reconnect_timeout:
-                                print("⏰ Controller reconnection timeout - exiting")
-                                return self.STATE_DISCONNECT
                             
                             # Sleep briefly to prevent excessive CPU usage
                             time.sleep(0.1)

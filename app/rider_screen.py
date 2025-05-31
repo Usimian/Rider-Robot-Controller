@@ -12,7 +12,7 @@ import pygame
 import xgoscreen.LCD_2inch as LCD_2inch
 from PIL import Image, ImageDraw, ImageFont
 from key import Button
-from xgo_toolkit import XGO  # type: ignore
+from xgo_toolkit import XGO     # type: ignore
 
 class RiderScreen:
     def __init__(self, robot=None, debug=False):
