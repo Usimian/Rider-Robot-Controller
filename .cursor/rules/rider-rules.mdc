@@ -10,3 +10,4 @@ The drive controller is embedded and accessed through xgo-toolkit.
 The xgo-toolkit is located at ~/xgo-toolkit.
 Any files created for testing purposes should begin with 'test_'
 All program files should be in the app folder
+Look at rider_controller.py and rider_screen.py

@@ -89,8 +89,8 @@ class BluetoothController_Rider(object):
                 self.__screen = RiderScreen(robot=self.__robot, debug=self.__debug)
                 self.__screen.update_status("Controller Connected")
                 self.__screen.update_speed(self.__speed_scale)
-                # Force initial display update
-                self.__screen.refresh_and_update_display()
+                # Force initial display update with main controller status
+                self.__screen.refresh_and_update_display(self.__controller_connected)
                 print("✅ LCD screen initialized successfully")
             except Exception as e:
                 print(f"⚠️  Failed to initialize LCD screen: {e}")
@@ -241,6 +241,8 @@ class BluetoothController_Rider(object):
                     # Update screen with disconnection status
                     if self.__screen:
                         self.__screen.update_status("Controller Timeout")
+                        # Pass controller status to screen to override its internal detection
+                        self.__screen.set_external_controller_status(False)
                 
         except Exception as e:
             if self.__debug:
@@ -690,6 +692,8 @@ class BluetoothController_Rider(object):
                         # Update screen status
                         if self.__screen:
                             self.__screen.update_status("Waiting for Controller")
+                            # Override screen's controller detection with main controller status
+                            self.__screen.set_external_controller_status(False)
                         
                         # Enter waiting mode instead of exiting
                         print("🔴 Controller disconnected - waiting for reconnection...")
@@ -717,7 +721,8 @@ class BluetoothController_Rider(object):
                                 # Update screen status
                                 if self.__screen:
                                     try:
-                                        self.__screen.refresh_and_update_display()
+                                        # Pass disconnected status to screen during waiting
+                                        self.__screen.refresh_and_update_display(False)
                                     except Exception as e:
                                         if self.__debug:
                                             print(f"Screen update error while waiting: {e}")
@@ -730,6 +735,8 @@ class BluetoothController_Rider(object):
                             print("✅ Controller reconnected!")
                             if self.__screen:
                                 self.__screen.update_status("Controller Reconnected")
+                                # Update screen with reconnected controller status
+                                self.__screen.set_external_controller_status(True)
                             # Reset last activity time
                             self.__last_controller_activity = time.time()
                             # Continue with normal loop
@@ -853,7 +860,8 @@ class BluetoothController_Rider(object):
                 # Update LCD screen periodically
                 if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
                     try:
-                        self.__screen.refresh_and_update_display()
+                        # Pass controller status from main controller to screen
+                        self.__screen.refresh_and_update_display(self.__controller_connected)
                         self.__screen_last_update = time.time()
                     except Exception as e:
                         if self.__debug:
@@ -978,7 +986,7 @@ if __name__ == "__main__":
             controller.print_button_mapping()
         
         print("📺 LCD screen will display battery level and speed settings")
-        print("�� Controller ready - use your gamepad to control the robot!")
+        print("🎮 Controller ready - use your gamepad to control the robot!")
         
         try:
             print("\n🚀 Starting control session...")
