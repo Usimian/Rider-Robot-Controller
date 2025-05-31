@@ -10,6 +10,7 @@ import time
 import pygame  # type: ignore
 from xgo_toolkit import XGO  # type: ignore
 from rider_screen import RiderScreen
+from key import Button
 
 class BluetoothController_Rider(object):
     
@@ -82,19 +83,32 @@ class BluetoothController_Rider(object):
         self.__screen = None
         self.__screen_last_update = 0
         self.__screen_update_interval = 2.0  # Update screen every 2 seconds
-        
-        if self.__controller_connected:
-            try:
-                print("📺 Initializing LCD screen display...")
-                self.__screen = RiderScreen(robot=self.__robot, debug=self.__debug)
+
+        # Add button reader
+        self.__robot_button = Button()  # Screen button reader for the robot
+
+        # Always try to initialize the screen, regardless of controller status
+        try:
+            print("📺 Initializing LCD screen display...")
+            self.__screen = RiderScreen(robot=self.__robot, debug=self.__debug)
+            
+            # Set initial screen status based on controller connection
+            if self.__controller_connected:
                 self.__screen.update_status("Controller Connected")
                 self.__screen.update_speed(self.__speed_scale)
                 # Force initial display update with main controller status
                 self.__screen.refresh_and_update_display(self.__controller_connected)
-                print("✅ LCD screen initialized successfully")
-            except Exception as e:
-                print(f"⚠️  Failed to initialize LCD screen: {e}")
-                self.__screen = None
+            else:
+                self.__screen.update_status("Waiting for Controller")
+                self.__screen.update_speed(self.__speed_scale)
+                # Force initial display update showing no controller
+                self.__screen.set_external_controller_status(False)
+                self.__screen.refresh_and_update_display(False)
+            
+            print("✅ LCD screen initialized successfully")
+        except Exception as e:
+            print(f"⚠️  Failed to initialize LCD screen: {e}")
+            self.__screen = None
     
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
@@ -637,30 +651,39 @@ class BluetoothController_Rider(object):
                     except:
                         if self.__debug:
                             print("D-pad right turn failed")
-    
+
+    def __check_robot_buttons(self):
+        """Check robot's physical buttons"""
+        if self.__robot_button.press_a():
+            print("Robot Button A pressed!")
+            # Add your functionality here
+            
+        elif self.__robot_button.press_b():
+            print("Robot Button B pressed!")
+            # Add your functionality here
+            
+        elif self.__robot_button.press_c():
+            print("Robot Button C pressed!")
+            # Add your functionality here
+            
+        elif self.__robot_button.press_d():
+            print("Robot Button D pressed!")
+            # Add your functionality here
+
     def start_control_loop(self):
         """Start the main control loop"""
+        # Don't exit immediately if no controller - wait for one to connect
         if not self.__controller_connected:
-            print("No controller connected!")
-            return self.STATE_NO_CONTROLLER
+            print("No controller connected at startup - waiting for controller...")
+            print("Connect your controller and press any button or move any stick")
+            print("Press Ctrl+C to exit")
         
         self.__running = True
         print("Starting Bluetooth controller input loop...")
-        print("Controls:")
-        print("  Left Stick Y: Forward/Backward")
-        print("  Right Stick X: Turn Left/Right")
-        print("  A/X: Lower to minimum height")
-        print("  B/Circle: Check battery level, show speed")
-        print("  Square: Circular swing")
-        print("  Triangle: Raise to maximum height")
-        print("  L1/L2: Decrease speed")
-        print("  R1/R2: Increase speed")
-        print("  Left Stick Click: Decrease height")
-        print("  PS Button (Right Stick Click): Increase height")
-        print("  Home Button: Reset robot")
-        print("  Back/Select: Reset robot")
-        print("  Start: Emergency stop")
-        print("  D-pad: Quick movements")
+        
+        # Only show controls if we have a controller initially
+        if self.__controller_connected:
+            self._print_controls()
         
         # Initialize debug counter for periodic status updates
         if self.__debug:
@@ -670,6 +693,10 @@ class BluetoothController_Rider(object):
             clock = pygame.time.Clock()
             controller_check_interval = 0.3  # Check controller every 0.3 seconds
             last_controller_check = 0
+            
+            # If no controller at startup, enter waiting mode immediately
+            if not self.__controller_connected:
+                self._enter_controller_waiting_mode()
             
             while self.__running:
                 current_time = time.time()
@@ -695,54 +722,8 @@ class BluetoothController_Rider(object):
                             # Override screen's controller detection with main controller status
                             self.__screen.set_external_controller_status(False)
                         
-                        # Enter waiting mode instead of exiting
-                        print("🔴 Controller disconnected - waiting for reconnection...")
-                        print("   Move any stick or press any button to reconnect")
-                        print("   Press Ctrl+C to exit")
-                        
-                        # Wait for controller to reconnect indefinitely
-                        wait_start_time = current_time
-                        wait_check_interval = 1.0  # Check every second while waiting
-                        last_wait_check = current_time
-                        
-                        while not self.__controller_connected and self.__running:
-                            wait_current_time = time.time()
-                            
-                            # Check for reconnection every second
-                            if wait_current_time - last_wait_check >= wait_check_interval:
-                                self.__check_controller_activity()
-                                last_wait_check = wait_current_time
-                                
-                                # Show waiting message periodically (every 30 seconds)
-                                wait_duration = wait_current_time - wait_start_time
-                                if int(wait_duration) % 30 == 0 and int(wait_duration) > 0:
-                                    print(f"⏰ Still waiting for controller... ({int(wait_duration)}s elapsed)")
-                                    
-                                # Update screen status
-                                if self.__screen:
-                                    try:
-                                        # Pass disconnected status to screen during waiting
-                                        self.__screen.refresh_and_update_display(False)
-                                    except Exception as e:
-                                        if self.__debug:
-                                            print(f"Screen update error while waiting: {e}")
-                            
-                            # Sleep briefly to prevent excessive CPU usage
-                            time.sleep(0.1)
-                        
-                        # If we get here, controller was reconnected or user stopped
-                        if self.__controller_connected:
-                            print("✅ Controller reconnected!")
-                            if self.__screen:
-                                self.__screen.update_status("Controller Reconnected")
-                                # Update screen with reconnected controller status
-                                self.__screen.set_external_controller_status(True)
-                            # Reset last activity time
-                            self.__last_controller_activity = time.time()
-                            # Continue with normal loop
-                        else:
-                            # User stopped the program
-                            break
+                        # Enter waiting mode
+                        self._enter_controller_waiting_mode()
                 
                 # Only process controller input if connected
                 if not self.__controller_connected:
@@ -883,6 +864,71 @@ class BluetoothController_Rider(object):
             
         return self.STATE_OK
     
+    def _enter_controller_waiting_mode(self):
+        """Enter waiting mode for controller connection"""
+        print("🔴 Controller disconnected - waiting for reconnection...")
+        print("   Move any stick or press any button to reconnect")
+        print("   Press Ctrl+C to exit")
+        
+        # Wait for controller to reconnect indefinitely
+        wait_start_time = time.time()
+        wait_check_interval = 1.0  # Check every second while waiting
+        last_wait_check = time.time()
+        
+        while not self.__controller_connected and self.__running:
+            wait_current_time = time.time()
+            
+            # Check for reconnection every second
+            if wait_current_time - last_wait_check >= wait_check_interval:
+                self.__check_controller_activity()
+                last_wait_check = wait_current_time
+                
+                # Show waiting message periodically (every 30 seconds)
+                wait_duration = wait_current_time - wait_start_time
+                if int(wait_duration) % 30 == 0 and int(wait_duration) > 0:
+                    print(f"⏰ Still waiting for controller... ({int(wait_duration)}s elapsed)")
+                    
+                # Update screen status
+                if self.__screen:
+                    try:
+                        # Pass disconnected status to screen during waiting
+                        self.__screen.refresh_and_update_display(False)
+                    except Exception as e:
+                        if self.__debug:
+                            print(f"Screen update error while waiting: {e}")
+            
+            # Sleep briefly to prevent excessive CPU usage
+            time.sleep(0.1)
+        
+        # If we get here, controller was reconnected or user stopped
+        if self.__controller_connected:
+            print("✅ Controller reconnected!")
+            self._print_controls()  # Show controls when controller connects
+            if self.__screen:
+                self.__screen.update_status("Controller Reconnected")
+                # Update screen with reconnected controller status
+                self.__screen.set_external_controller_status(True)
+            # Reset last activity time
+            self.__last_controller_activity = time.time()
+    
+    def _print_controls(self):
+        """Print the control instructions"""
+        print("Controls:")
+        print("  Left Stick Y: Forward/Backward")
+        print("  Right Stick X: Turn Left/Right")
+        print("  A/X: Lower to minimum height")
+        print("  B/Circle: Check battery level, show speed")
+        print("  Square: Circular swing")
+        print("  Triangle: Raise to maximum height")
+        print("  L1/L2: Decrease speed")
+        print("  R1/R2: Increase speed")
+        print("  Left Stick Click: Decrease height")
+        print("  PS Button (Right Stick Click): Increase height")
+        print("  Home Button: Reset robot")
+        print("  Back/Select: Reset robot")
+        print("  Start: Emergency stop")
+        print("  D-pad: Quick movements")
+    
     def stop(self):
         """Stop the control loop"""
         self.__running = False
@@ -980,30 +1026,28 @@ if __name__ == "__main__":
     print("\n🎮 Setting up Bluetooth controller...")
     controller = BluetoothController_Rider(robot, controller_id=0, debug=debug_mode)
     
+    # Show current button mapping if in debug mode
+    if debug_mode:
+        controller.print_button_mapping()
+    
+    # Always start the control loop, regardless of initial controller status
+    print("📺 LCD screen will display battery level and speed settings")
     if controller.is_connected():
-        # Show current button mapping if in debug mode
-        if debug_mode:
-            controller.print_button_mapping()
-        
-        print("📺 LCD screen will display battery level and speed settings")
         print("🎮 Controller ready - use your gamepad to control the robot!")
-        
-        try:
-            print("\n🚀 Starting control session...")
-            result = controller.start_control_loop()
-            if result == controller.STATE_DISCONNECT:
-                print("\n📱 Controller disconnected during operation")
-            elif result == controller.STATE_OK:
-                print("\n✅ Control session ended normally")
-        except KeyboardInterrupt:
-            print("\n🛑 Program interrupted by user")
-        finally:
-            print("\n🧹 Cleaning up...")
-            controller.cleanup()
-            robot.rider_reset()
-            print("✅ Cleanup complete!")
     else:
-        print("❌ Failed to connect to Bluetooth controller")
-        print("   • Make sure your controller is paired and connected via Bluetooth")
-        print("   • Check if controller is already in use by another program")
-        print("   • Try reconnecting the controller") 
+        print("🎮 Waiting for controller connection...")
+    
+    try:
+        print("\n🚀 Starting control session...")
+        result = controller.start_control_loop()
+        if result == controller.STATE_DISCONNECT:
+            print("\n📱 Controller disconnected during operation")
+        elif result == controller.STATE_OK:
+            print("\n✅ Control session ended normally")
+    except KeyboardInterrupt:
+        print("\n🛑 Program interrupted by user")
+    finally:
+        print("\n🧹 Cleaning up...")
+        controller.cleanup()
+        robot.rider_reset()
+        print("✅ Cleanup complete!") 

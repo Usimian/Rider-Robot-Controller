@@ -133,22 +133,22 @@ class RiderScreen:
             return self.__color_red
     
     def __draw_battery_indicator(self, x, y, battery_level):
-        """Draw a visual battery indicator"""
-        # Battery outline
-        battery_width = 60
-        battery_height = 25
+        """Draw a small battery indicator similar to controller icon"""
+        # Small battery outline (similar size to controller icon)
+        battery_width = 20
+        battery_height = 12
         
         # Draw battery outline
         self.__draw_rect(x, y, battery_width, battery_height, self.__color_white, filled=False)
         
-        # Draw battery terminal
-        self.__draw_rect(x + battery_width, y + 8, 4, 9, self.__color_white, filled=True)
+        # Draw battery terminal (smaller)
+        self.__draw_rect(x + battery_width, y + 3, 2, 6, self.__color_white, filled=True)
         
         # Draw battery fill based on level
-        fill_width = int((battery_width - 4) * (battery_level / 100))
+        fill_width = int((battery_width - 2) * (battery_level / 100))
         if fill_width > 0:
             battery_color = self.__get_battery_color(battery_level)
-            self.__draw_rect(x + 2, y + 2, fill_width, battery_height - 4, battery_color, filled=True)
+            self.__draw_rect(x + 1, y + 1, fill_width, battery_height - 2, battery_color, filled=True)
     
     def __draw_speed_indicator(self, x, y, speed_scale):
         """Draw a visual speed indicator"""
@@ -170,38 +170,35 @@ class RiderScreen:
         # Clear screen
         self.__clear_screen()
         
+        # Update timestamp - moved to top center
+        current_time = time.strftime("%H:%M")
+        self.__draw_text(140, 5, current_time, self.__color_white, self.__font_small)
+        
         # Controller status icon (upper left)
         self.__draw_controller_icon(10, 10)
         
-        # Title
-        self.__draw_text(90, 20, "RIDER ROBOT", self.__color_white, self.__font_large)
+        # Battery indicator (upper right) - small icon
+        self.__draw_battery_indicator(280, 15, self.__battery_level)
         
-        # Status line
-        status_color = self.__color_green if self.__robot_status == "Connected" else self.__color_red
-        self.__draw_text(100, 50, f"Status: {self.__robot_status}", status_color, self.__font_small)
-        
-        # Battery section
-        self.__draw_text(20, 90, "BATTERY", self.__color_white, self.__font_medium)
-        
-        # Battery indicator
-        self.__draw_battery_indicator(20, 120, self.__battery_level)
-        
-        # Battery percentage
+        # Battery percentage next to battery icon
         battery_color = self.__get_battery_color(self.__battery_level)
-        self.__draw_text(100, 115, f"{self.__battery_level}%", battery_color, self.__font_large)
+        self.__draw_text(245, 12, f"{self.__battery_level}%", battery_color, self.__font_small)
         
-        # Speed section
-        self.__draw_text(20, 170, "SPEED SETTING", self.__color_white, self.__font_medium)
+        # Title - moved down 10 pixels
+        self.__draw_text(90, 30, "RIDER ROBOT", self.__color_white, self.__font_large)
         
-        # Speed indicator
-        self.__draw_speed_indicator(20, 200, self.__speed_scale)
+        # Status line - moved down 10 pixels
+        status_color = self.__color_green if self.__robot_status == "Connected" else self.__color_red
+        self.__draw_text(100, 60, f"Status: {self.__robot_status}", status_color, self.__font_small)
         
-        # Speed value
-        self.__draw_text(190, 195, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
+        # Speed section (moved up since battery section is removed)
+        self.__draw_text(20, 90, "SPEED SETTING", self.__color_white, self.__font_medium)
         
-        # Update timestamp
-        current_time = time.strftime("%H:%M")
-        self.__draw_text(270, 10, current_time, self.__color_white, self.__font_small)
+        # Speed indicator (moved up)
+        self.__draw_speed_indicator(20, 120, self.__speed_scale)
+        
+        # Speed value (moved up)
+        self.__draw_text(190, 115, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
         
         # Show the updated display
         self.__display.ShowImage(self.__splash)
