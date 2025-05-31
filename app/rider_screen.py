@@ -27,6 +27,7 @@ class RiderScreen:
         self.__speed_scale = 1.0
         self.__robot_status = "Disconnected"
         self.__controller_connected = False
+        self.__roll_balance_enabled = False
         
         # Initialize LCD display
         self.__setup_display()
@@ -165,6 +166,21 @@ class RiderScreen:
             speed_color = self.__color_blue
             self.__draw_rect(x + 2, y + 2, fill_width, bar_height - 4, speed_color, filled=True)
     
+    def __draw_button_labels(self):
+        """Draw labels for the physical buttons around the screen"""
+        # A button (lower right) - "Quit"
+        self.__draw_text(270, 210, "Quit", self.__color_white, self.__font_small)
+        
+        # You can add more button labels here later:
+        # B button (lower left)
+        # self.__draw_text(10, 210, "B", self.__color_white, self.__font_small)
+        
+        # C button (upper left) 
+        # self.__draw_text(10, 30, "C", self.__color_white, self.__font_small)
+        
+        # D button (upper right)
+        # self.__draw_text(270, 30, "D", self.__color_white, self.__font_small)
+
     def __update_display(self):
         """Update the display with current information"""
         # Clear screen
@@ -178,7 +194,7 @@ class RiderScreen:
         self.__draw_controller_icon(10, 10)
         
         # Battery indicator (upper right) - small icon
-        self.__draw_battery_indicator(280, 15, self.__battery_level)
+        self.__draw_battery_indicator(285, 15, self.__battery_level)
         
         # Battery percentage next to battery icon
         battery_color = self.__get_battery_color(self.__battery_level)
@@ -200,6 +216,17 @@ class RiderScreen:
         # Speed value (moved up)
         self.__draw_text(190, 115, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
         
+        # Roll Balance section (new)
+        self.__draw_text(20, 150, "ROLL BALANCE", self.__color_white, self.__font_medium)
+        
+        # Roll balance status with color indicator
+        balance_color = self.__color_green if self.__roll_balance_enabled else self.__color_red
+        balance_status = "ON" if self.__roll_balance_enabled else "OFF"
+        self.__draw_text(175, 150, balance_status, balance_color, self.__font_medium)
+        
+        # Draw button labels
+        self.__draw_button_labels()
+        
         # Show the updated display
         self.__display.ShowImage(self.__splash)
     
@@ -220,6 +247,12 @@ class RiderScreen:
         self.__robot_status = str(status)
         if self.__debug:
             print(f"Status updated: {self.__robot_status}")
+    
+    def update_roll_balance(self, enabled):
+        """Update the roll balance status"""
+        self.__roll_balance_enabled = bool(enabled)
+        if self.__debug:
+            print(f"Roll balance updated: {'ON' if self.__roll_balance_enabled else 'OFF'}")
     
     def get_controller_status(self):
         """Get the current controller connection status"""

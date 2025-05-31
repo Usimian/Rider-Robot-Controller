@@ -20,7 +20,7 @@ class BluetoothController_Rider(object):
         'MIN_HEIGHT': 0,           # A/X button - Lower to minimum height
         'BATTERY_CHECK': 1,         # B/Circle button - Check battery level
         'MAX_HEIGHT': 2,          # Triangle button - Raise to maximum height
-        'ACTION_SWING': 3,          # Square button - Circular swing
+        'ROLL_BALANCE': 3,          # Square button - Toggle roll balance
         'SPEED_DOWN': 4,            # L1 - Decrease speed
         'SPEED_UP': 5,              # R1 - Increase speed
         'RESET': 9,                 # Back/Select - Reset robot
@@ -50,6 +50,9 @@ class BluetoothController_Rider(object):
         self.__height = 85
         self.__height_min = 75
         self.__height_max = 115
+        
+        # Roll balance state
+        self.__roll_balance_enabled = False
         
         # Button states
         self.__button_states = {}
@@ -96,11 +99,13 @@ class BluetoothController_Rider(object):
             if self.__controller_connected:
                 self.__screen.update_status("Controller Connected")
                 self.__screen.update_speed(self.__speed_scale)
+                self.__screen.update_roll_balance(self.__roll_balance_enabled)
                 # Force initial display update with main controller status
                 self.__screen.refresh_and_update_display(self.__controller_connected)
             else:
                 self.__screen.update_status("Waiting for Controller")
                 self.__screen.update_speed(self.__speed_scale)
+                self.__screen.update_roll_balance(self.__roll_balance_enabled)
                 # Force initial display update showing no controller
                 self.__screen.set_external_controller_status(False)
                 self.__screen.refresh_and_update_display(False)
@@ -277,13 +282,18 @@ class BluetoothController_Rider(object):
         self.__speed_scale = 1.0
         self.__turn_scale = 50  # Use consistent value
         
+        # Reset roll balance to disabled state
+        self.__roll_balance_enabled = False
+        self.__robot.rider_balance_roll(0)
+        
         # Update screen with reset values
         if self.__screen:
             self.__screen.update_speed(self.__speed_scale)
-            self.__screen.update_status("Reset Complete")
-            
+            self.__screen.update_roll_balance(self.__roll_balance_enabled)
+            self.__screen.update_status("Reset Complete - Roll Balance: OFF")
+        
         if self.__debug:
-            print("Robot reset to default state")
+            print("Robot reset to default state - Roll balance disabled")
     
     def __check_battery_voltage(self):
         """Read and display battery voltage"""
@@ -526,20 +536,19 @@ class BluetoothController_Rider(object):
                 if self.__debug:
                     print(f"Robot raised to maximum height: {self.__height}")
                     
-            elif button_id == self.BUTTON_MAPPING['ACTION_SWING']:  # Square button
-                # Stop current movement before action
-                self.__robot.rider_move_x(0)
-                self.__robot.rider_turn(0)
-                try:
-                    self.__robot.rider_move_y(0)
-                except:
-                    pass
-                    
-                self.__action_in_progress = True
-                self.__action_end_time = time.time() + 3.0  # 3 seconds for action
-                self.__robot.action(6)  # Circular swing
+            elif button_id == self.BUTTON_MAPPING['ROLL_BALANCE']:  # Square button
+                # Toggle roll balance
+                self.__roll_balance_enabled = not self.__roll_balance_enabled
+                self.__robot.rider_balance_roll(1 if self.__roll_balance_enabled else 0)
+                
+                # Update screen with new status
+                if self.__screen:
+                    self.__screen.update_roll_balance(self.__roll_balance_enabled)
+                    status = "Roll Balance: ON" if self.__roll_balance_enabled else "Roll Balance: OFF"
+                    self.__screen.update_status(status)
+                
                 if self.__debug:
-                    print("Action: Circular swing")
+                    print(f"Roll balance {'enabled' if self.__roll_balance_enabled else 'disabled'}")
                     
             elif button_id == self.BUTTON_MAPPING['SPEED_DOWN']:  # L1 button
                 # Decrease speed
@@ -653,20 +662,26 @@ class BluetoothController_Rider(object):
                             print("D-pad right turn failed")
 
     def __check_robot_buttons(self):
-        """Check robot's physical buttons"""
-        if self.__robot_button.press_a():
+        """Check robot's physical buttons around edge of the screen"""
+        if self.__robot_button.press_a():   # A button is on the lower right side of the screen
             print("Robot Button A pressed!")
-            # Add your functionality here
+            print("🛑 Quit button pressed - stopping program...")
+            # Update screen to show quitting status
+            if self.__screen:
+                self.__screen.update_status("Quitting...")
+                self.__screen.refresh_and_update_display(self.__controller_connected)
+            # Stop the control loop
+            self.__running = False
             
-        elif self.__robot_button.press_b():
+        elif self.__robot_button.press_b():   # B button is on the lower left side of the screen
             print("Robot Button B pressed!")
             # Add your functionality here
             
-        elif self.__robot_button.press_c():
+        elif self.__robot_button.press_c():  # C button is on the upper left side of the screen
             print("Robot Button C pressed!")
             # Add your functionality here
             
-        elif self.__robot_button.press_d():
+        elif self.__robot_button.press_d():   # D button is on the upper right side of the screen
             print("Robot Button D pressed!")
             # Add your functionality here
 
@@ -837,7 +852,10 @@ class BluetoothController_Rider(object):
                         self.__controller_connected = False
                         # Don't return here - let the next iteration handle it in waiting mode
                         continue
-                
+
+                # Check robot buttons
+                self.__check_robot_buttons()
+
                 # Update LCD screen periodically
                 if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
                     try:
@@ -868,7 +886,7 @@ class BluetoothController_Rider(object):
         """Enter waiting mode for controller connection"""
         print("🔴 Controller disconnected - waiting for reconnection...")
         print("   Move any stick or press any button to reconnect")
-        print("   Press Ctrl+C to exit")
+        print("   Press robot A button (Quit) or Ctrl+C to exit")
         
         # Wait for controller to reconnect indefinitely
         wait_start_time = time.time()
@@ -877,6 +895,14 @@ class BluetoothController_Rider(object):
         
         while not self.__controller_connected and self.__running:
             wait_current_time = time.time()
+            
+            # Check robot buttons even while waiting for controller
+            self.__check_robot_buttons()
+            
+            # If robot button A was pressed (quit), exit the waiting loop
+            if not self.__running:
+                print("🛑 Quit button pressed during controller wait - exiting...")
+                break
             
             # Check for reconnection every second
             if wait_current_time - last_wait_check >= wait_check_interval:
@@ -918,7 +944,7 @@ class BluetoothController_Rider(object):
         print("  Right Stick X: Turn Left/Right")
         print("  A/X: Lower to minimum height")
         print("  B/Circle: Check battery level, show speed")
-        print("  Square: Circular swing")
+        print("  Square: Toggle roll balance (ON/OFF)")
         print("  Triangle: Raise to maximum height")
         print("  L1/L2: Decrease speed")
         print("  R1/R2: Increase speed")
