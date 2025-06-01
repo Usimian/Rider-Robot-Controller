@@ -26,7 +26,6 @@ class RiderScreen:
         # Current values to display
         self.__battery_level = 0
         self.__speed_scale = 1.0
-        self.__robot_status = "Disconnected"
         self.__controller_connected = False
         self.__roll_balance_enabled = False
         self.__performance_mode_enabled = False
@@ -205,10 +204,6 @@ class RiderScreen:
         # Title - moved down 10 pixels
         self.__draw_text(90, 30, "RIDER ROBOT", self.__color_white, self.__font_large)
         
-        # Status line - moved down 10 pixels
-        status_color = self.__color_green if self.__robot_status == "Connected" else self.__color_red
-        self.__draw_text(100, 60, f"Status: {self.__robot_status}", status_color, self.__font_small)
-        
         # Speed section (moved up since battery section is removed)
         self.__draw_text(20, 90, "SPEED SETTING", self.__color_white, self.__font_medium)
 
@@ -252,12 +247,6 @@ class RiderScreen:
         if self.__debug:
             print(f"Speed updated: {self.__speed_scale:.1f}x")
     
-    def update_status(self, status):
-        """Update the robot status"""
-        self.__robot_status = str(status)
-        if self.__debug:
-            print(f"Status updated: {self.__robot_status}")
-    
     def update_roll_balance(self, enabled):
         """Update the roll balance status"""
         self.__roll_balance_enabled = bool(enabled)
@@ -295,12 +284,10 @@ class RiderScreen:
                 
                 if battery_level is not None and battery_level > 0:
                     self.update_battery(battery_level)
-                    self.update_status("Connected")
                 else:
-                    self.update_status("No Battery Data")
+                    self.update_battery(0)
                     
             except Exception as e:
-                self.update_status("Connection Error")
                 if self.__debug:
                     print(f"Error reading from robot: {e}")
     

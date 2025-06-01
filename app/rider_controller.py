@@ -90,7 +90,7 @@ class BluetoothController_Rider(object):
         self.__screen = None
         self.__screen_last_update = 0
         self.__screen_update_interval = 2.0  # Update screen every 2 seconds
-
+        
         # Add button reader
         self.__robot_button = Button()  # Screen button reader for the robot
 
@@ -101,14 +101,12 @@ class BluetoothController_Rider(object):
             
             # Set initial screen status based on controller connection
             if self.__controller_connected:
-                self.__screen.update_status("Controller Connected")
                 self.__screen.update_speed(self.__speed_scale)
                 self.__screen.update_roll_balance(self.__roll_balance_enabled)
                 self.__screen.update_performance_mode(self.__performance_mode_enabled)
                 # Force initial display update with main controller status
                 self.__screen.refresh_and_update_display(self.__controller_connected)
             else:
-                self.__screen.update_status("Waiting for Controller")
                 self.__screen.update_speed(self.__speed_scale)
                 self.__screen.update_roll_balance(self.__roll_balance_enabled)
                 self.__screen.update_performance_mode(self.__performance_mode_enabled)
@@ -172,7 +170,6 @@ class BluetoothController_Rider(object):
                     if i == self.__controller_id:
                         self.__controller = joystick
                         self.__controller_connected = True
-                        print(f'---Successfully connected to controller: {joystick.get_name()}---')
                     
                     if self.__debug:
                         print(f"Initialized controller {i}: {joystick.get_name()}")
@@ -265,7 +262,6 @@ class BluetoothController_Rider(object):
                     
                     # Update screen with disconnection status
                     if self.__screen:
-                        self.__screen.update_status("Controller Timeout")
                         # Pass controller status to screen to override its internal detection
                         self.__screen.set_external_controller_status(False)
                 
@@ -301,7 +297,6 @@ class BluetoothController_Rider(object):
             self.__screen.update_speed(self.__speed_scale)
             self.__screen.update_roll_balance(self.__roll_balance_enabled)
             self.__screen.update_performance_mode(self.__performance_mode_enabled)
-            self.__screen.update_status("Reset Complete - Roll Balance: OFF, Performance: OFF")
         
         if self.__debug:
             print("Robot reset to default state - Roll balance and performance mode disabled")
@@ -309,10 +304,6 @@ class BluetoothController_Rider(object):
     def __check_battery_voltage(self):
         """Read and display battery voltage"""
         try:
-            print("=" * 50)
-            print("🔋 BATTERY STATUS CHECK")
-            print("=" * 50)
-            
             # Try both battery reading methods for compatibility
             battery_level = None
             
@@ -340,8 +331,6 @@ class BluetoothController_Rider(object):
             
             if battery_level is not None:
                 self.__display_battery_status(battery_level)
-            
-            print("=" * 50)
             
         except Exception as e:
             print(f"❌ Battery check failed: {e}")
@@ -544,8 +533,6 @@ class BluetoothController_Rider(object):
                 # Update screen with new status
                 if self.__screen:
                     self.__screen.update_performance_mode(self.__performance_mode_enabled)
-                    status = "Performance Mode: ON" if self.__performance_mode_enabled else "Performance Mode: OFF"
-                    self.__screen.update_status(status)
                 
                 if self.__debug:
                     print(f"Performance mode {'enabled' if self.__performance_mode_enabled else 'disabled'}")
@@ -565,8 +552,6 @@ class BluetoothController_Rider(object):
                 # Update screen with new status
                 if self.__screen:
                     self.__screen.update_roll_balance(self.__roll_balance_enabled)
-                    status = "Roll Balance: ON" if self.__roll_balance_enabled else "Roll Balance: OFF"
-                    self.__screen.update_status(status)
                 
                 if self.__debug:
                     print(f"Roll balance {'enabled' if self.__roll_balance_enabled else 'disabled'}")
@@ -613,10 +598,6 @@ class BluetoothController_Rider(object):
                 if self.__debug:
                     print(f"Height decreased to: {self.__height}")
                     
-            elif button_id == self.BUTTON_MAPPING['BATTERY_CHECK']:  # PS button
-                # Check battery level
-                self.__quick_battery_check()
-        
         elif not pressed:
             self.__button_states[button_id] = False
     
@@ -685,9 +666,9 @@ class BluetoothController_Rider(object):
         if self.__robot_button.press_a():   # A button is on the lower right side of the screen
             print("Robot Button A pressed!")
             print("🛑 Quit button pressed - stopping program...")
-            # Update screen to show quitting status
+
             if self.__screen:
-                self.__screen.update_status("Quitting...")
+                # Force initial display update with main controller status
                 self.__screen.refresh_and_update_display(self.__controller_connected)
             # Stop the control loop
             self.__running = False
@@ -709,15 +690,9 @@ class BluetoothController_Rider(object):
         # Don't exit immediately if no controller - wait for one to connect
         if not self.__controller_connected:
             print("No controller connected at startup - waiting for controller...")
-            print("Connect your controller and press any button or move any stick")
             print("Press Ctrl+C to exit")
         
         self.__running = True
-        print("Starting Bluetooth controller input loop...")
-        
-        # Only show controls if we have a controller initially
-        if self.__controller_connected:
-            self._print_controls()
         
         # Initialize debug counter for periodic status updates
         if self.__debug:
@@ -752,7 +727,6 @@ class BluetoothController_Rider(object):
                         
                         # Update screen status
                         if self.__screen:
-                            self.__screen.update_status("Waiting for Controller")
                             # Override screen's controller detection with main controller status
                             self.__screen.set_external_controller_status(False)
                         
@@ -948,31 +922,11 @@ class BluetoothController_Rider(object):
         # If we get here, controller was reconnected or user stopped
         if self.__controller_connected:
             print("✅ Controller reconnected!")
-            self._print_controls()  # Show controls when controller connects
             if self.__screen:
-                self.__screen.update_status("Controller Reconnected")
                 # Update screen with reconnected controller status
                 self.__screen.set_external_controller_status(True)
             # Reset last activity time
             self.__last_controller_activity = time.time()
-    
-    def _print_controls(self):
-        """Print the control instructions"""
-        print("Controls:")
-        print("  Left Stick Y: Forward/Backward")
-        print("  Right Stick X: Turn Left/Right")
-        print("  A/X: Lower to minimum height")
-        print("  B/Circle: Toggle performance mode")
-        print("  Square: Toggle roll balance (ON/OFF)")
-        print("  Triangle: Raise to maximum height")
-        print("  L1/L2: Decrease speed")
-        print("  R1/R2: Increase speed")
-        print("  Left Stick Click: Decrease height")
-        print("  PS Button (Right Stick Click): Check battery level")
-        print("  Home Button: Reset robot")
-        print("  Back/Select: Reset robot")
-        print("  Start: Emergency stop")
-        print("  D-pad: Quick movements")
     
     def stop(self):
         """Stop the control loop"""
@@ -1068,7 +1022,7 @@ if __name__ == "__main__":
         print("   • Try power cycling the robot")
         sys.exit(1)
     
-    print("\n🎮 Setting up Bluetooth controller...")
+    print("🎮 Setting up Bluetooth controller...")
     controller = BluetoothController_Rider(robot, controller_id=0, debug=debug_mode)
     
     # Show current button mapping if in debug mode
@@ -1076,9 +1030,8 @@ if __name__ == "__main__":
         controller.print_button_mapping()
     
     # Always start the control loop, regardless of initial controller status
-    print("📺 LCD screen will display battery level and speed settings")
     if controller.is_connected():
-        print("🎮 Controller ready - use your gamepad to control the robot!")
+        print("🎮 Controller ready")
     else:
         print("🎮 Waiting for controller connection...")
     
