@@ -3,6 +3,7 @@
 
 # Rider Robot LCD Screen Display
 # Shows battery level, percentage, and current speed setting
+# This is the main screen file for the Rider robot
 # Marc Wester
 
 import time
@@ -28,6 +29,7 @@ class RiderScreen:
         self.__robot_status = "Disconnected"
         self.__controller_connected = False
         self.__roll_balance_enabled = False
+        self.__performance_mode_enabled = False
         
         # Initialize LCD display
         self.__setup_display()
@@ -194,11 +196,11 @@ class RiderScreen:
         self.__draw_controller_icon(10, 10)
         
         # Battery indicator (upper right) - small icon
-        self.__draw_battery_indicator(285, 15, self.__battery_level)
+        self.__draw_battery_indicator(235, 15, self.__battery_level)
         
         # Battery percentage next to battery icon
         battery_color = self.__get_battery_color(self.__battery_level)
-        self.__draw_text(245, 12, f"{self.__battery_level}%", battery_color, self.__font_small)
+        self.__draw_text(265, 12, f"{self.__battery_level}%", battery_color, self.__font_small)
         
         # Title - moved down 10 pixels
         self.__draw_text(90, 30, "RIDER ROBOT", self.__color_white, self.__font_large)
@@ -209,10 +211,10 @@ class RiderScreen:
         
         # Speed section (moved up since battery section is removed)
         self.__draw_text(20, 90, "SPEED SETTING", self.__color_white, self.__font_medium)
-        
+
         # Speed indicator (moved up)
         self.__draw_speed_indicator(20, 120, self.__speed_scale)
-        
+
         # Speed value (moved up)
         self.__draw_text(190, 115, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
         
@@ -223,6 +225,14 @@ class RiderScreen:
         balance_color = self.__color_green if self.__roll_balance_enabled else self.__color_red
         balance_status = "ON" if self.__roll_balance_enabled else "OFF"
         self.__draw_text(175, 150, balance_status, balance_color, self.__font_medium)
+        
+        # Performance Mode section (new)
+        self.__draw_text(20, 175, "PERFORMANCE", self.__color_white, self.__font_medium)
+        
+        # Performance mode status with color indicator
+        performance_color = self.__color_green if self.__performance_mode_enabled else self.__color_red
+        performance_status = "ON" if self.__performance_mode_enabled else "OFF"
+        self.__draw_text(175, 175, performance_status, performance_color, self.__font_medium)
         
         # Draw button labels
         self.__draw_button_labels()
@@ -253,6 +263,12 @@ class RiderScreen:
         self.__roll_balance_enabled = bool(enabled)
         if self.__debug:
             print(f"Roll balance updated: {'ON' if self.__roll_balance_enabled else 'OFF'}")
+    
+    def update_performance_mode(self, enabled):
+        """Update the performance mode status"""
+        self.__performance_mode_enabled = bool(enabled)
+        if self.__debug:
+            print(f"Performance mode updated: {'ON' if self.__performance_mode_enabled else 'OFF'}")
     
     def get_controller_status(self):
         """Get the current controller connection status"""

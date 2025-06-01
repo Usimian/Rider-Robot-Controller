@@ -2,6 +2,7 @@
 # coding=utf-8
 
 # This is a bluetooth controller for the Rider two wheel balancing robot
+# This is the main controller file for the Rider robot
 # Marc Wester
 
 import os
@@ -18,7 +19,7 @@ class BluetoothController_Rider(object):
     # Easy to modify for different controllers
     BUTTON_MAPPING = {
         'MIN_HEIGHT': 0,           # A/X button - Lower to minimum height
-        'BATTERY_CHECK': 1,         # B/Circle button - Check battery level
+        'PERFORMANCE_MODE': 1,      # B/Circle button - Toggle performance mode
         'MAX_HEIGHT': 2,          # Triangle button - Raise to maximum height
         'ROLL_BALANCE': 3,          # Square button - Toggle roll balance
         'SPEED_DOWN': 4,            # L1 - Decrease speed
@@ -53,6 +54,9 @@ class BluetoothController_Rider(object):
         
         # Roll balance state
         self.__roll_balance_enabled = False
+        
+        # Performance mode state
+        self.__performance_mode_enabled = False
         
         # Button states
         self.__button_states = {}
@@ -100,12 +104,14 @@ class BluetoothController_Rider(object):
                 self.__screen.update_status("Controller Connected")
                 self.__screen.update_speed(self.__speed_scale)
                 self.__screen.update_roll_balance(self.__roll_balance_enabled)
+                self.__screen.update_performance_mode(self.__performance_mode_enabled)
                 # Force initial display update with main controller status
                 self.__screen.refresh_and_update_display(self.__controller_connected)
             else:
                 self.__screen.update_status("Waiting for Controller")
                 self.__screen.update_speed(self.__speed_scale)
                 self.__screen.update_roll_balance(self.__roll_balance_enabled)
+                self.__screen.update_performance_mode(self.__performance_mode_enabled)
                 # Force initial display update showing no controller
                 self.__screen.set_external_controller_status(False)
                 self.__screen.refresh_and_update_display(False)
@@ -286,14 +292,19 @@ class BluetoothController_Rider(object):
         self.__roll_balance_enabled = False
         self.__robot.rider_balance_roll(0)
         
+        # Reset performance mode to disabled state
+        self.__performance_mode_enabled = False
+        self.__robot.rider_perform(0)
+        
         # Update screen with reset values
         if self.__screen:
             self.__screen.update_speed(self.__speed_scale)
             self.__screen.update_roll_balance(self.__roll_balance_enabled)
-            self.__screen.update_status("Reset Complete - Roll Balance: OFF")
+            self.__screen.update_performance_mode(self.__performance_mode_enabled)
+            self.__screen.update_status("Reset Complete - Roll Balance: OFF, Performance: OFF")
         
         if self.__debug:
-            print("Robot reset to default state - Roll balance disabled")
+            print("Robot reset to default state - Roll balance and performance mode disabled")
     
     def __check_battery_voltage(self):
         """Read and display battery voltage"""
@@ -525,10 +536,20 @@ class BluetoothController_Rider(object):
                 if self.__debug:
                     print(f"Robot lowered to minimum height: {self.__height}")
                     
-            elif button_id == self.BUTTON_MAPPING['BATTERY_CHECK']:  # B/Circle button
-                # Check battery level
-                self.__quick_battery_check()
+            elif button_id == self.BUTTON_MAPPING['PERFORMANCE_MODE']:  # B/Circle button
+                # Toggle performance mode
+                self.__performance_mode_enabled = not self.__performance_mode_enabled
+                self.__robot.rider_perform(1 if self.__performance_mode_enabled else 0)
+
+                # Update screen with new status
+                if self.__screen:
+                    self.__screen.update_performance_mode(self.__performance_mode_enabled)
+                    status = "Performance Mode: ON" if self.__performance_mode_enabled else "Performance Mode: OFF"
+                    self.__screen.update_status(status)
                 
+                if self.__debug:
+                    print(f"Performance mode {'enabled' if self.__performance_mode_enabled else 'disabled'}")
+                    
             elif button_id == self.BUTTON_MAPPING['MAX_HEIGHT']:  # Triangle button
                 # Raise robot to maximum height
                 self.__height = self.__height_max
@@ -574,6 +595,7 @@ class BluetoothController_Rider(object):
                     
             elif button_id == self.BUTTON_MAPPING['EMERGENCY_STOP']:  # Start button
                 # Emergency stop
+                self.__robot.rider_reset_odom()
                 self.__robot.rider_move_x(0)
                 self.__robot.rider_turn(0)
                 try:
@@ -591,12 +613,9 @@ class BluetoothController_Rider(object):
                 if self.__debug:
                     print(f"Height decreased to: {self.__height}")
                     
-            elif button_id == self.BUTTON_MAPPING['HEIGHT_UP']:  # PS button
-                # Increase height
-                self.__height = min(self.__height_max, self.__height + 5)
-                self.__robot.rider_height(self.__height)
-                if self.__debug:
-                    print(f"Height increased to: {self.__height}")
+            elif button_id == self.BUTTON_MAPPING['BATTERY_CHECK']:  # PS button
+                # Check battery level
+                self.__quick_battery_check()
         
         elif not pressed:
             self.__button_states[button_id] = False
@@ -943,13 +962,13 @@ class BluetoothController_Rider(object):
         print("  Left Stick Y: Forward/Backward")
         print("  Right Stick X: Turn Left/Right")
         print("  A/X: Lower to minimum height")
-        print("  B/Circle: Check battery level, show speed")
+        print("  B/Circle: Toggle performance mode")
         print("  Square: Toggle roll balance (ON/OFF)")
         print("  Triangle: Raise to maximum height")
         print("  L1/L2: Decrease speed")
         print("  R1/R2: Increase speed")
         print("  Left Stick Click: Decrease height")
-        print("  PS Button (Right Stick Click): Increase height")
+        print("  PS Button (Right Stick Click): Check battery level")
         print("  Home Button: Reset robot")
         print("  Back/Select: Reset robot")
         print("  Start: Emergency stop")
