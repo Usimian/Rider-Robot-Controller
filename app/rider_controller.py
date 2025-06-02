@@ -3,15 +3,19 @@
 
 # This is a bluetooth controller for the Rider two wheel balancing robot
 # This is the main controller file for the Rider robot
+# Includes video streaming support via rider_video.py
 # Marc Wester
 
 import os
 import sys
 import time
-import pygame  # type: ignore
-from xgo_toolkit import XGO  # type: ignore
+import pygame
+from xgo_toolkit import XGO
 from rider_screen import RiderScreen
 from key import Button
+
+# Video streaming is handled by rider_screen.py which imports rider_video.py
+# No direct import needed here as video integration is handled by the screen module
 
 class BluetoothController_Rider(object):
     
@@ -47,7 +51,7 @@ class BluetoothController_Rider(object):
         
         # Movement parameters
         self.__speed_scale = 1.0
-        self.__turn_scale = 50  # Reduced from 100 for better control
+        self.__turn_scale = 100  # Reduced from 100 for better control
         self.__height = 85
         self.__height_min = 75
         self.__height_max = 115
@@ -69,10 +73,6 @@ class BluetoothController_Rider(object):
         self.__controller_timeout = 10.0  # 10 seconds timeout
         self.__last_controller_activity = 0
         self.__controllers_initialized = []
-        
-        # Read and display battery voltage if robot is connected
-        if self.__robot is not None:
-            self.__check_battery_voltage()
         
         # PYGAME 2.6.1 COMPATIBILITY FIXES
         os.environ['SDL_VIDEODRIVER'] = 'dummy'  # Use dummy video driver for headless operation
@@ -118,6 +118,10 @@ class BluetoothController_Rider(object):
         except Exception as e:
             print(f"⚠️  Failed to initialize LCD screen: {e}")
             self.__screen = None
+        
+        # Read and display battery voltage if robot is connected (after screen is initialized)
+        if self.__robot is not None:
+            self.__check_battery_voltage()
     
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
@@ -301,73 +305,100 @@ class BluetoothController_Rider(object):
         if self.__debug:
             print("Robot reset to default state - Roll balance and performance mode disabled")
     
-    def __check_battery_voltage(self):
-        """Read and display battery voltage"""
+    def __read_battery_level(self):
+        """Unified method to read battery level with fallback options"""
         try:
-            # Try both battery reading methods for compatibility
-            battery_level = None
-            
             # First try the rider-specific method
             try:
                 battery_level = self.__robot.rider_read_battery()
-                print(f"📊 Battery Level (rider method): {battery_level}%")
+                if self.__debug:
+                    print(f"📊 Battery Level (rider method): {battery_level}%")
+                return battery_level
             except AttributeError:
                 # Fallback to standard method
                 try:
                     battery_level = self.__robot.read_battery()
-                    print(f"📊 Battery Level (standard method): {battery_level}%")
+                    if self.__debug:
+                        print(f"📊 Battery Level (standard method): {battery_level}%")
+                    return battery_level
                 except AttributeError:
-                    print("⚠️  Battery reading method not available")
-                    return
+                    if self.__debug:
+                        print("⚠️  Battery reading method not available")
+                    return None
             except Exception as e:
-                print(f"⚠️  Error reading battery with rider method: {e}")
+                if self.__debug:
+                    print(f"⚠️  Error reading battery with rider method: {e}")
                 # Try standard method as fallback
                 try:
                     battery_level = self.__robot.read_battery()
-                    print(f"📊 Battery Level (fallback method): {battery_level}%")
+                    if self.__debug:
+                        print(f"📊 Battery Level (fallback method): {battery_level}%")
+                    return battery_level
                 except Exception as e2:
-                    print(f"❌ Failed to read battery: {e2}")
-                    return
-            
-            if battery_level is not None:
-                self.__display_battery_status(battery_level)
-            
+                    if self.__debug:
+                        print(f"❌ Failed to read battery: {e2}")
+                    return None
         except Exception as e:
-            print(f"❌ Battery check failed: {e}")
+            if self.__debug:
+                print(f"❌ Battery reading failed: {e}")
+            return None
     
-    def __display_battery_status(self, battery_level):
+    def __display_battery_status(self, battery_level, detailed=True):
         """Display battery status with appropriate warnings"""
         try:
             level = int(battery_level)
             
             if level <= 0:
-                print("❌ WARNING: Battery reading failed or robot not responding")
-                print("   • Check robot connection")
+                message = "❌ WARNING: Battery reading failed or robot not responding"
+                print(message)
+                if detailed:
+                    print("   • Check robot connection")
                 
             elif level < 20:
-                print("🚨 CRITICAL: Battery very low!")
-                print(f"   • Current level: {level}%")
+                message = f"🚨 CRITICAL: Battery very low! ({level}%)"
+                print(message)
+                if detailed:
+                    print(f"   • Current level: {level}%")
                 
             elif level < 40:
-                print("⚠️  WARNING: Battery low")
-                print(f"   • Current level: {level}%")
+                message = f"⚠️  WARNING: Battery low ({level}%)"
+                print(message)
+                if detailed:
+                    print(f"   • Current level: {level}%")
                 
             elif level < 70:
-                print("📱 GOOD: Battery level adequate")
-                print(f"   • Current level: {level}%")
+                message = f"📱 GOOD: Battery level adequate ({level}%)"
+                print(message)
+                if detailed:
+                    print(f"   • Current level: {level}%")
                 
             else:
-                print("✅ EXCELLENT: Battery level good!")
-                print(f"   • Current level: {level}%")
+                message = f"✅ EXCELLENT: Battery level good! ({level}%)"
+                print(message)
+                if detailed:
+                    print(f"   • Current level: {level}%")
                 
-            # Additional voltage estimate (rough calculation)
-            # Typical Li-ion: 3.0V (empty) to 4.2V (full) per cell
-            # Assuming 2S configuration: 6.0V - 8.4V range
-            estimated_voltage = 6.0 + (level / 100.0) * 2.4
-            print(f"   • Estimated voltage: ~{estimated_voltage:.1f}V")
-            
+            # Additional voltage estimate (only for detailed display)
+            if detailed:
+                # Typical Li-ion: 3.0V (empty) to 4.2V (full) per cell
+                # Assuming 2S configuration: 6.0V - 8.4V range
+                estimated_voltage = 6.0 + (level / 100.0) * 2.4
+                print(f"   • Estimated voltage: ~{estimated_voltage:.1f}V")
+                
         except (ValueError, TypeError):
             print(f"⚠️  Invalid battery reading: {battery_level}")
+    
+    def __check_battery_voltage(self):
+        """Read and display battery voltage at startup"""
+        battery_level = self.__read_battery_level()
+        
+        if battery_level is not None:
+            self.__display_battery_status(battery_level, detailed=True)
+            # Update screen with battery level if available
+            if self.__screen:
+                self.__screen.update_battery(battery_level)
+        else:
+            print("❌ Could not read battery level")
     
     def __process_movement(self, left_stick_x, left_stick_y, right_stick_x, right_stick_y):
         """Process analog stick movements for robot control"""
@@ -852,6 +883,11 @@ class BluetoothController_Rider(object):
                 # Update LCD screen periodically
                 if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
                     try:
+                        # Update battery level on screen periodically
+                        current_battery = self.__read_battery_level()
+                        if current_battery is not None:
+                            self.__screen.update_battery(current_battery)
+                        
                         # Pass controller status from main controller to screen
                         self.__screen.refresh_and_update_display(self.__controller_connected)
                         self.__screen_last_update = time.time()
@@ -966,43 +1002,16 @@ class BluetoothController_Rider(object):
 
     def __quick_battery_check(self):
         """Quick battery check for button press"""
-        try:
-            # Try both battery reading methods for compatibility
-            battery_level = None
-            
-            # First try the rider-specific method
-            try:
-                battery_level = self.__robot.rider_read_battery()
-            except AttributeError:
-                # Fallback to standard method
-                try:
-                    battery_level = self.__robot.read_battery()
-                except AttributeError:
-                    print("⚠️  Battery reading method not available")
-                    return
-            except Exception as e:
-                # Try standard method as fallback
-                try:
-                    battery_level = self.__robot.read_battery()
-                except Exception as e2:
-                    print(f"❌ Failed to read battery: {e2}")
-                    return
-            
-            if battery_level is not None:
-                level = int(battery_level)
-                if level <= 0:
-                    print("❌ Battery reading failed or robot not responding")
-                elif level < 20:
-                    print(f"🚨 CRITICAL: Battery very low! ({level}%)")
-                elif level < 40:
-                    print(f"⚠️  WARNING: Battery low ({level}%)")
-                elif level < 70:
-                    print(f"📱 GOOD: Battery level adequate ({level}%)")
-                else:
-                    print(f"✅ EXCELLENT: Battery level good! ({level}%)")
-            
-        except Exception as e:
-            print(f"❌ Battery check failed: {e}")
+        battery_level = self.__read_battery_level()
+        
+        if battery_level is not None:
+            self.__display_battery_status(battery_level, detailed=False)
+        else:
+            print("❌ Could not read battery level")
+
+    def get_battery_level(self):
+        """Get current battery level - public method for screen integration"""
+        return self.__read_battery_level()
 
 
 # Example usage

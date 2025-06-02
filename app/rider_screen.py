@@ -13,6 +13,15 @@ import xgoscreen.LCD_2inch as LCD_2inch
 from PIL import Image, ImageDraw, ImageFont
 from key import Button
 
+# Import video streaming module
+try:
+    from rider_video import RiderVideo
+    VIDEO_AVAILABLE = True
+except ImportError:
+    VIDEO_AVAILABLE = False
+    if __debug__:
+        print("⚠️  Video module not available - video display disabled")
+
 class RiderScreen:
     def __init__(self, robot=None, debug=False):
         self.__debug = debug
@@ -30,14 +39,45 @@ class RiderScreen:
         self.__roll_balance_enabled = False
         self.__performance_mode_enabled = False
         
+        # Video settings
+        self.__video = None
+        self.__video_enabled = False
+        self.__last_video_frame = None
+        
         # Initialize LCD display
         self.__setup_display()
         
         # Initialize button for interaction
         self.__button = Button()
         
+        # Initialize video if available
+        self.__setup_video()
+        
         if self.__debug:
             print("RiderScreen initialized")
+    
+    def __setup_video(self):
+        """Initialize video streaming if available"""
+        if not VIDEO_AVAILABLE:
+            if self.__debug:
+                print("Video not available - skipping video setup")
+            return
+        
+        try:
+            self.__video = RiderVideo(camera_id=0, debug=self.__debug)
+            if self.__video.is_camera_available():
+                self.__video.start_streaming()
+                self.__video_enabled = True
+                if self.__debug:
+                    print("✅ Video streaming initialized successfully")
+            else:
+                if self.__debug:
+                    print("⚠️  No camera detected - video display disabled")
+                self.__video_enabled = False
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️  Failed to initialize video: {e}")
+            self.__video_enabled = False
     
     def __setup_display(self):
         """Initialize the LCD display"""
@@ -152,20 +192,42 @@ class RiderScreen:
             battery_color = self.__get_battery_color(battery_level)
             self.__draw_rect(x + 1, y + 1, fill_width, battery_height - 2, battery_color, filled=True)
     
-    def __draw_speed_indicator(self, x, y, speed_scale):
-        """Draw a visual speed indicator"""
-        # Speed bar background
-        bar_width = 150
-        bar_height = 20
+    def __draw_video_frame(self, x, y):
+        """Draw video frame in the lower right corner"""
+        if not self.__video_enabled or self.__video is None:
+            # Draw placeholder rectangle
+            video_width, video_height = 80, 60
+            self.__draw_rect(x, y, video_width, video_height, self.__color_gray, filled=False)
+            self.__draw_text(x + 10, y + 20, "CAM", self.__color_gray, self.__font_small)
+            return
         
-        # Draw speed bar outline
-        self.__draw_rect(x, y, bar_width, bar_height, self.__color_white, filled=False)
-        
-        # Draw speed fill
-        fill_width = int((bar_width - 4) * (speed_scale / 2.0))  # Max speed is 2.0
-        if fill_width > 0:
-            speed_color = self.__color_blue
-            self.__draw_rect(x + 2, y + 2, fill_width, bar_height - 4, speed_color, filled=True)
+        try:
+            # Get current video frame
+            frame = self.__video.get_current_frame()
+            if frame is not None:
+                self.__last_video_frame = frame
+            
+            # Use last known frame if current frame is not available
+            if self.__last_video_frame is not None:
+                # Paste video frame onto the display
+                self.__splash.paste(self.__last_video_frame, (x, y))
+                
+                # Draw border around video
+                video_width, video_height = self.__video.get_frame_size()
+                self.__draw_rect(x, y, video_width, video_height, self.__color_white, filled=False)
+            else:
+                # Draw placeholder if no frame available
+                video_width, video_height = 80, 60
+                self.__draw_rect(x, y, video_width, video_height, self.__color_gray, filled=False)
+                self.__draw_text(x + 20, y + 25, "...", self.__color_gray, self.__font_small)
+                
+        except Exception as e:
+            if self.__debug:
+                print(f"Error drawing video frame: {e}")
+            # Draw error placeholder
+            video_width, video_height = 80, 60
+            self.__draw_rect(x, y, video_width, video_height, self.__color_red, filled=False)
+            self.__draw_text(x + 15, y + 25, "ERR", self.__color_red, self.__font_small)
     
     def __draw_button_labels(self):
         """Draw labels for the physical buttons around the screen"""
@@ -201,33 +263,30 @@ class RiderScreen:
         battery_color = self.__get_battery_color(self.__battery_level)
         self.__draw_text(265, 12, f"{self.__battery_level}%", battery_color, self.__font_small)
         
-        # Title - moved down 10 pixels
-        self.__draw_text(90, 30, "RIDER ROBOT", self.__color_white, self.__font_large)
+        # Speed section
+        self.__draw_text(20, 125, "SPD", self.__color_white, self.__font_medium)
+        self.__draw_text(65, 125, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
         
-        # Speed section (moved up since battery section is removed)
-        self.__draw_text(20, 90, "SPEED SETTING", self.__color_white, self.__font_medium)
-
-        # Speed indicator (moved up)
-        self.__draw_speed_indicator(20, 120, self.__speed_scale)
-
-        # Speed value (moved up)
-        self.__draw_text(190, 115, f"{self.__speed_scale:.1f}x", self.__color_white, self.__font_medium)
+        # Roll Balance section (left aligned)
+        self.__draw_text(20, 150, "BAL", self.__color_white, self.__font_medium)
         
-        # Roll Balance section (new)
-        self.__draw_text(20, 150, "ROLL BALANCE", self.__color_white, self.__font_medium)
-        
-        # Roll balance status with color indicator
+        # Roll balance status with color indicator (left aligned)
         balance_color = self.__color_green if self.__roll_balance_enabled else self.__color_red
         balance_status = "ON" if self.__roll_balance_enabled else "OFF"
-        self.__draw_text(175, 150, balance_status, balance_color, self.__font_medium)
+        self.__draw_text(65, 150, balance_status, balance_color, self.__font_medium)
         
-        # Performance Mode section (new)
-        self.__draw_text(20, 175, "PERFORMANCE", self.__color_white, self.__font_medium)
+        # Performance Mode section (left aligned)
+        self.__draw_text(20, 175, "FUN", self.__color_white, self.__font_medium)
         
-        # Performance mode status with color indicator
+        # Performance mode status with color indicator (left aligned)
         performance_color = self.__color_green if self.__performance_mode_enabled else self.__color_red
         performance_status = "ON" if self.__performance_mode_enabled else "OFF"
-        self.__draw_text(175, 175, performance_status, performance_color, self.__font_medium)
+        self.__draw_text(65, 175, performance_status, performance_color, self.__font_medium)
+        
+        # Video frame in lower right corner (above Quit button)
+        video_x = 230  # Position to fit in lower right
+        video_y = 140  # Above the Quit button
+        self.__draw_video_frame(video_x, video_y)
         
         # Draw button labels
         self.__draw_button_labels()
@@ -267,10 +326,11 @@ class RiderScreen:
         """Refresh data from the robot if available"""
         if self.__robot is not None:
             try:
-                # Try to read battery level
+                # Try to read battery level using consolidated method
                 battery_level = None
                 
-                # Try rider-specific method first
+                # First try to use controller's battery reading method if we have a reference to it
+                # For now, use the existing robot methods but consolidate the logic
                 try:
                     battery_level = self.__robot.rider_read_battery()
                 except AttributeError:
@@ -280,7 +340,11 @@ class RiderScreen:
                     except AttributeError:
                         battery_level = 0
                 except Exception:
-                    battery_level = 0
+                    # Final fallback
+                    try:
+                        battery_level = self.__robot.read_battery()
+                    except:
+                        battery_level = 0
                 
                 if battery_level is not None and battery_level > 0:
                     self.update_battery(battery_level)
@@ -290,6 +354,7 @@ class RiderScreen:
             except Exception as e:
                 if self.__debug:
                     print(f"Error reading from robot: {e}")
+                self.update_battery(0)
     
     def set_external_controller_status(self, connected):
         """Set controller status from external source (overrides internal detection)"""
@@ -313,6 +378,11 @@ class RiderScreen:
     def cleanup(self):
         """Clean up resources"""
         try:
+            # Clean up video first
+            if self.__video:
+                self.__video.cleanup()
+                self.__video = None
+            
             # Turn off the display properly
             print("Turning off LCD display...")
             
