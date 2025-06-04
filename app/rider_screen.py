@@ -39,6 +39,11 @@ class RiderScreen:
         self.__roll_balance_enabled = False
         self.__performance_mode_enabled = False
         
+        # Odometry/IMU data
+        self.__roll = 0.0
+        self.__pitch = 0.0
+        self.__yaw = 0.0
+        
         # Video settings
         self.__video = None
         self.__video_enabled = False
@@ -196,7 +201,7 @@ class RiderScreen:
         """Draw video frame in the lower right corner"""
         if not self.__video_enabled or self.__video is None:
             # Draw placeholder rectangle
-            video_width, video_height = 80, 60
+            video_width, video_height = 160, 120  # Updated to match new frame size
             self.__draw_rect(x, y, video_width, video_height, self.__color_gray, filled=False)
             self.__draw_text(x + 10, y + 20, "CAM", self.__color_gray, self.__font_small)
             return
@@ -217,7 +222,7 @@ class RiderScreen:
                 self.__draw_rect(x, y, video_width, video_height, self.__color_white, filled=False)
             else:
                 # Draw placeholder if no frame available
-                video_width, video_height = 80, 60
+                video_width, video_height = 160, 120  # Updated to match new frame size
                 self.__draw_rect(x, y, video_width, video_height, self.__color_gray, filled=False)
                 self.__draw_text(x + 20, y + 25, "...", self.__color_gray, self.__font_small)
                 
@@ -225,9 +230,19 @@ class RiderScreen:
             if self.__debug:
                 print(f"Error drawing video frame: {e}")
             # Draw error placeholder
-            video_width, video_height = 80, 60
+            video_width, video_height = 160, 120  # Updated to match new frame size
             self.__draw_rect(x, y, video_width, video_height, self.__color_red, filled=False)
             self.__draw_text(x + 15, y + 25, "ERR", self.__color_red, self.__font_small)
+    
+    def __draw_odometry_info(self, x, y):
+        """Draw odometry information above the video window"""
+        # Draw Roll, Pitch, Yaw values in a compact format
+        odom_text = f"Roll: {self.__roll:+0.1f}°"
+        self.__draw_text(x, y, odom_text, self.__color_yellow, self.__font_medium)
+        odom_text = f"Pitch: {self.__pitch:+0.1f}°"
+        self.__draw_text(x, y+25, odom_text, self.__color_yellow, self.__font_medium)
+        odom_text = f"Yaw: {self.__yaw:+0.1f}°"
+        self.__draw_text(x, y+50, odom_text, self.__color_yellow, self.__font_medium)
     
     def __draw_button_labels(self):
         """Draw labels for the physical buttons around the screen"""
@@ -284,9 +299,12 @@ class RiderScreen:
         self.__draw_text(65, 175, performance_status, performance_color, self.__font_medium)
         
         # Video frame in lower right corner (above Quit button)
-        video_x = 230  # Position to fit in lower right
-        video_y = 140  # Above the Quit button
+        video_x = 150  # Adjusted position to fit larger 160x120 video (was 230)
+        video_y = 80   # Moved up 20 pixels from 110 to 90
         self.__draw_video_frame(video_x, video_y)
+        
+        # Draw odometry information above the video window
+        self.__draw_odometry_info(20, video_y - 40)
         
         # Draw button labels
         self.__draw_button_labels()
@@ -350,6 +368,9 @@ class RiderScreen:
                     self.update_battery(battery_level)
                 else:
                     self.update_battery(0)
+                
+                # Read odometry data
+                self.__read_odometry_data()
                     
             except Exception as e:
                 if self.__debug:
@@ -404,4 +425,32 @@ class RiderScreen:
             try:
                 self.__display.clear()
             except:
-                pass 
+                pass
+    
+    def __read_odometry_data(self):
+        """Read odometry/IMU data from robot"""
+        if self.__robot is not None:
+            try:
+                # Try to read IMU data (roll, pitch, yaw) as odometry substitute
+                try:
+                    self.__roll = self.__robot.rider_read_roll() if hasattr(self.__robot, 'rider_read_roll') else self.__robot.read_roll()
+                except (AttributeError, Exception):
+                    self.__roll = 0.0
+                
+                try:
+                    self.__pitch = self.__robot.rider_read_pitch() if hasattr(self.__robot, 'rider_read_pitch') else self.__robot.read_pitch()
+                except (AttributeError, Exception):
+                    self.__pitch = 0.0
+                
+                try:
+                    self.__yaw = self.__robot.rider_read_yaw() if hasattr(self.__robot, 'rider_read_yaw') else self.__robot.read_yaw()
+                except (AttributeError, Exception):
+                    self.__yaw = 0.0
+                    
+                if self.__debug:
+                    print(f"Odometry data - Roll: {self.__roll:.1f}°, Pitch: {self.__pitch:.1f}°, Yaw: {self.__yaw:.1f}°")
+                    
+            except Exception as e:
+                if self.__debug:
+                    print(f"Error reading odometry data: {e}")
+                self.__roll = self.__pitch = self.__yaw = 0.0 

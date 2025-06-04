@@ -31,8 +31,8 @@ class RiderVideo:
         self.__frame_lock = threading.Lock()
         
         # Video settings
-        self.__frame_width = 80   # Small size for LCD corner display
-        self.__frame_height = 60
+        self.__frame_width = 160   # Doubled size for LCD corner display (was 80)
+        self.__frame_height = 120  # Doubled size for LCD corner display (was 60)
         self.__fps = 15          # Moderate FPS to reduce CPU load
         
         # Check if OpenCV is available
