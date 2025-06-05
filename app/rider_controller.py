@@ -491,11 +491,6 @@ class BluetoothController_Rider(object):
         # Dead zone to prevent drift
         dead_zone = 0.1
         
-        # Debug: Show all stick values before processing
-        if self.__debug and (abs(left_stick_x) > 0.05 or abs(left_stick_y) > 0.05 or 
-                            abs(right_stick_x) > 0.05 or abs(right_stick_y) > 0.05):
-            print(f"RAW STICKS - Left: ({left_stick_x:.3f}, {left_stick_y:.3f}) Right: ({right_stick_x:.3f}, {right_stick_y:.3f})")
-        
         # Apply dead zone
         if abs(left_stick_x) < dead_zone:
             left_stick_x = 0
@@ -506,23 +501,29 @@ class BluetoothController_Rider(object):
         if abs(right_stick_y) < dead_zone:
             right_stick_y = 0
         
-        # Debug: Show processed stick values
-        if self.__debug and (abs(left_stick_x) > 0 or abs(left_stick_y) > 0 or 
-                            abs(right_stick_x) > 0 or abs(right_stick_y) > 0):
-            print(f"PROCESSED STICKS - Left: ({left_stick_x:.3f}, {left_stick_y:.3f}) Right: ({right_stick_x:.3f}, {right_stick_y:.3f})")
-        
         # Left stick controls forward/backward movement
         if abs(left_stick_y) > 0:
             speed = -left_stick_y * self.__speed_scale  # Invert Y axis
+            
+            # Apply asymmetric scaling to compensate for hardware differences
+            if speed < 0:  # Backward movement (negative speed)
+                speed *= 1.5  # Increase backward speed by 50% to match forward
+            
             # Limit speed to safe values
-            speed = max(-0.5, min(0.5, speed))
+            speed = max(-0.75, min(0.5, speed))  # Allow slightly more backward speed
             self.__robot.rider_move_x(speed)
             if self.__debug:
-                print(f"Move: speed={speed:.2f}")
+                if not hasattr(self, '_last_move_debug') or abs(speed - self._last_move_debug) > 0.1:
+                    direction = "FORWARD" if speed > 0 else "BACKWARD"
+                    print(f"Move: {speed:.2f} ({direction})")
+                    self._last_move_debug = speed
         else:
             self.__robot.rider_move_x(0)
+            # Reset debug tracking (only in debug mode)
+            if self.__debug and hasattr(self, '_last_move_debug'):
+                delattr(self, '_last_move_debug')
         
-        # Right stick controls turning - IMPROVED LOGIC WITH EXTENSIVE DEBUG
+        # Right stick controls turning - SIMPLIFIED LOGIC
         if abs(right_stick_x) > 0:
             # Use a different approach for turning
             turn_speed = right_stick_x * self.__turn_scale
@@ -531,74 +532,21 @@ class BluetoothController_Rider(object):
             if abs(turn_speed) > 0 and abs(turn_speed) < 20:
                 turn_speed = 20 if turn_speed > 0 else -20
             
+            # Simplified debug output (only show when turn value changes significantly)
             if self.__debug:
-                print(f"🎮 TURN INPUT DETECTED!")
-                print(f"   Raw stick X: {right_stick_x:.3f}")
-                print(f"   Turn scale: {self.__turn_scale}")
-                print(f"   Calculated turn: {turn_speed:.1f}")
-                print(f"   Final turn command: {int(turn_speed)}")
+                if not hasattr(self, '_last_turn_debug') or abs(turn_speed - self._last_turn_debug) > 10:
+                    print(f"🎮 TURN: {turn_speed:.0f} (stick: {right_stick_x:.2f})")
+                    self._last_turn_debug = turn_speed
             
-            # Try multiple turn methods
-            turn_success = False
-            
-            # Method 1: rider_turn
+            # Try primary turn method only to avoid conflicts
             try:
                 self.__robot.rider_turn(int(turn_speed))
-                turn_success = True
-                if self.__debug:
-                    print(f"✅ rider_turn({int(turn_speed)}) - SUCCESS")
             except Exception as e:
                 if self.__debug:
-                    print(f"❌ rider_turn({int(turn_speed)}) - FAILED: {e}")
-            
-            # Method 2: rider_move_y (fallback)
-            if not turn_success:
-                try:
-                    turn_factor = right_stick_x * 0.3
-                    self.__robot.rider_move_y(turn_factor)
-                    turn_success = True
-                    if self.__debug:
-                        print(f"✅ rider_move_y({turn_factor:.2f}) - SUCCESS (fallback)")
-                except Exception as e:
-                    if self.__debug:
-                        print(f"❌ rider_move_y({turn_factor:.2f}) - FAILED: {e}")
-            
-            # Method 3: Try standard turn method
-            if not turn_success:
-                try:
-                    self.__robot.turn(int(turn_speed))
-                    turn_success = True
-                    if self.__debug:
-                        print(f"✅ turn({int(turn_speed)}) - SUCCESS (standard method)")
-                except Exception as e:
-                    if self.__debug:
-                        print(f"❌ turn({int(turn_speed)}) - FAILED: {e}")
-            
-            # Method 4: Try differential movement
-            if not turn_success:
-                try:
-                    # Create turning by differential leg movement
-                    turn_factor = right_stick_x * 0.2
-                    self.__robot.rider_move_x(0.1)  # Small forward
-                    if turn_factor > 0:
-                        # Turn right by moving left side faster
-                        self.__robot.rider_move_y(-abs(turn_factor))
-                    else:
-                        # Turn left by moving right side faster  
-                        self.__robot.rider_move_y(abs(turn_factor))
-                    turn_success = True
-                    if self.__debug:
-                        print(f"✅ Differential turn - SUCCESS")
-                except Exception as e:
-                    if self.__debug:
-                        print(f"❌ Differential turn - FAILED: {e}")
-            
-            if not turn_success:
-                if self.__debug:
-                    print("❌ ALL TURN METHODS FAILED!")
+                    print(f"❌ Turn failed: {e}")
                     
         else:
-            # Stop all turn methods
+            # Stop turning - ensure all turn methods are stopped
             try:
                 self.__robot.rider_turn(0)
             except:
@@ -607,10 +555,9 @@ class BluetoothController_Rider(object):
                 self.__robot.rider_move_y(0)
             except:
                 pass
-            try:
-                self.__robot.turn(0)
-            except:
-                pass
+            # Reset debug tracking (only in debug mode)
+            if self.__debug and hasattr(self, '_last_turn_debug'):
+                delattr(self, '_last_turn_debug')
     
     def __process_buttons(self, button_id, pressed):
         """Process button presses"""
@@ -898,23 +845,7 @@ class BluetoothController_Rider(object):
                             abs(right_stick_x) > 0.05 or abs(right_stick_y) > 0.05):
                             self.__last_controller_activity = current_time
                         
-                        # Test alternative mappings for right stick X
-                        if self.__debug and hasattr(self, '_debug_counter'):
-                            # Check if we have extra axes for right stick X
-                            if self.__controller.get_numaxes() > 4:
-                                alt_right_x_axis2 = self.__controller.get_axis(2) if self.__controller.get_numaxes() > 2 else 0
-                                alt_right_x_axis5 = self.__controller.get_axis(5) if self.__controller.get_numaxes() > 5 else 0
-                                
-                                # If current right stick X shows no movement but alternatives do
-                                if abs(right_stick_x) < 0.05 and (abs(alt_right_x_axis2) > 0.05 or abs(alt_right_x_axis5) > 0.05):
-                                    if abs(alt_right_x_axis2) > 0.05:
-                                        right_stick_x = alt_right_x_axis2
-                                        if self._debug_counter % 50 == 0:
-                                            print(f"🔄 FALLBACK: Using axis 2 for right stick X: {right_stick_x:.3f}")
-                                    elif abs(alt_right_x_axis5) > 0.05:
-                                        right_stick_x = alt_right_x_axis5
-                                        if self._debug_counter % 50 == 0:
-                                            print(f"🔄 FALLBACK: Using axis 5 for right stick X: {right_stick_x:.3f}")
+
                         
                         # Debug: Show controller info periodically
                         if self.__debug and hasattr(self, '_debug_counter'):
