@@ -12,10 +12,8 @@ import time
 import pygame
 from xgo_toolkit import XGO
 from rider_screen import RiderScreen
+from rider_video import RiderVideo
 from key import Button
-
-# Video streaming is handled by rider_screen.py which imports rider_video.py
-# No direct import needed here as video integration is handled by the screen module
 
 class BluetoothController_Rider(object):
     
@@ -51,7 +49,7 @@ class BluetoothController_Rider(object):
         
         # Movement parameters
         self.__speed_scale = 1.0
-        self.__turn_scale = 100  # Reduced from 100 for better control
+        self.__turn_scale = 100
         self.__height = 85
         self.__height_min = 75
         self.__height_max = 115
@@ -61,6 +59,10 @@ class BluetoothController_Rider(object):
         
         # Performance mode state
         self.__performance_mode_enabled = False
+        
+        # Camera state (will be set to True if camera is available during setup)
+        self.__camera_enabled = False
+        self.__video = None
         
         # Button states
         self.__button_states = {}
@@ -118,6 +120,13 @@ class BluetoothController_Rider(object):
         except Exception as e:
             print(f"⚠️  Failed to initialize LCD screen: {e}")
             self.__screen = None
+        
+        # Initialize camera after screen is set up
+        self.__setup_camera()
+        
+        # Connect video instance to screen
+        if self.__screen and self.__video:
+            self.__screen.set_video_instance(self.__video)
         
         # Read and display battery voltage if robot is connected (after screen is initialized)
         if self.__robot is not None:
@@ -196,6 +205,74 @@ class BluetoothController_Rider(object):
             print(f'---Failed to initialize pygame: {e}---')
             self.__controller_connected = False
     
+    def __setup_camera(self):
+        """Initialize camera system"""
+        try:
+            print("📷 Initializing camera system...")
+            self.__video = RiderVideo(camera_id=0, debug=self.__debug)
+            
+            if self.__video.is_camera_available():
+                print("✅ Camera detected - starting streaming...")
+                # Start streaming immediately on startup
+                if self.__video.start_streaming():
+                    self.__camera_enabled = True
+                    print("✅ Camera enabled on startup")
+                    if self.__screen:
+                        self.__screen.update_camera_status(True)
+                        self.__screen.update_status("Camera: ON")
+                else:
+                    print("❌ Failed to start camera on startup")
+                    self.__camera_enabled = False
+                    if self.__screen:
+                        self.__screen.update_camera_status(False)
+                        self.__screen.update_status("Camera Failed")
+            else:
+                print("⚠️  No camera detected")
+                self.__video = None
+                self.__camera_enabled = False
+                if self.__screen:
+                    self.__screen.update_camera_status(False)
+                    self.__screen.update_status("No Camera")
+                    
+        except Exception as e:
+            print(f"⚠️  Failed to initialize camera: {e}")
+            self.__video = None
+            self.__camera_enabled = False
+            if self.__screen:
+                self.__screen.update_camera_status(False)
+                self.__screen.update_status("Camera Error")
+    
+    def __toggle_camera(self):
+        """Toggle camera on/off"""
+        if self.__video is None or not self.__video.is_camera_available():
+            print("❌ Camera not available")
+            if self.__screen:
+                self.__screen.update_status("No Camera Available")
+            return
+        
+        self.__camera_enabled = not self.__camera_enabled
+        
+        if self.__camera_enabled:
+            print("📷 Enabling camera...")
+            if self.__video.start_streaming():
+                print("✅ Camera enabled")
+                if self.__screen:
+                    self.__screen.update_camera_status(True)
+                    self.__screen.update_status("Camera: ON")
+            else:
+                print("❌ Failed to start camera")
+                self.__camera_enabled = False
+                if self.__screen:
+                    self.__screen.update_camera_status(False)
+                    self.__screen.update_status("Camera Failed")
+        else:
+            print("📷 Disabling camera...")
+            self.__video.stop_streaming()
+            print("✅ Camera disabled")
+            if self.__screen:
+                self.__screen.update_camera_status(False)
+                self.__screen.update_status("Camera: OFF")
+
     def __check_controller_activity(self):
         """Check for controller activity and update connection status (integrated from rider_screen.py)"""
         try:
@@ -706,7 +783,8 @@ class BluetoothController_Rider(object):
             
         elif self.__robot_button.press_b():   # B button is on the lower left side of the screen
             print("Robot Button B pressed!")
-            # Add your functionality here
+            print("🎥 Camera button pressed - toggling camera...")
+            self.__toggle_camera()
             
         elif self.__robot_button.press_c():  # C button is on the upper left side of the screen
             print("Robot Button C pressed!")
@@ -975,6 +1053,13 @@ class BluetoothController_Rider(object):
     def cleanup(self):
         """Clean up resources"""
         self.stop()
+        
+        # Clean up camera first
+        if self.__video:
+            try:
+                self.__video.cleanup()
+            except Exception as e:
+                print(f"⚠️  Error cleaning up camera: {e}")
         
         # Clean up LCD screen
         if self.__screen:

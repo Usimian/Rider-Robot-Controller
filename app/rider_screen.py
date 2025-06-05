@@ -35,9 +35,11 @@ class RiderScreen:
         # Current values to display
         self.__battery_level = 0
         self.__speed_scale = 1.0
+        self.__robot_status = "Disconnected"
         self.__controller_connected = False
         self.__roll_balance_enabled = False
         self.__performance_mode_enabled = False
+        self.__camera_enabled = False
         
         # Odometry/IMU data
         self.__roll = 0.0
@@ -55,8 +57,8 @@ class RiderScreen:
         # Initialize button for interaction
         self.__button = Button()
         
-        # Initialize video if available
-        self.__setup_video()
+        # Video will be set up externally by the controller
+        # self.__setup_video()
         
         if self.__debug:
             print("RiderScreen initialized")
@@ -199,11 +201,17 @@ class RiderScreen:
     
     def __draw_video_frame(self, x, y):
         """Draw video frame in the lower right corner"""
-        if not self.__video_enabled or self.__video is None:
+        if not self.__camera_enabled or self.__video is None:
             # Draw placeholder rectangle
             video_width, video_height = 160, 120  # Updated to match new frame size
-            self.__draw_rect(x, y, video_width, video_height, self.__color_gray, filled=False)
-            self.__draw_text(x + 10, y + 20, "CAM", self.__color_gray, self.__font_small)
+            placeholder_color = self.__color_green if self.__video is not None else self.__color_gray
+            self.__draw_rect(x, y, video_width, video_height, placeholder_color, filled=False)
+            
+            # Show different text based on camera availability and status
+            if self.__video is None:
+                self.__draw_text(x + 50, y + 50, "NO CAM", self.__color_gray, self.__font_small)
+            elif not self.__camera_enabled:
+                self.__draw_text(x + 45, y + 50, "CAM OFF", placeholder_color, self.__font_small)
             return
         
         try:
@@ -249,9 +257,9 @@ class RiderScreen:
         # A button (lower right) - "Quit"
         self.__draw_text(270, 210, "Quit", self.__color_white, self.__font_small)
         
-        # You can add more button labels here later:
-        # B button (lower left)
-        # self.__draw_text(10, 210, "B", self.__color_white, self.__font_small)
+        # B button (lower left) - "Camera"
+        camera_color = self.__color_green if self.__camera_enabled else self.__color_white
+        self.__draw_text(10, 210, "Camera", camera_color, self.__font_small)
         
         # C button (upper left) 
         # self.__draw_text(10, 30, "C", self.__color_white, self.__font_small)
@@ -335,6 +343,24 @@ class RiderScreen:
         self.__performance_mode_enabled = bool(enabled)
         if self.__debug:
             print(f"Performance mode updated: {'ON' if self.__performance_mode_enabled else 'OFF'}")
+    
+    def update_camera_status(self, enabled):
+        """Update the camera status"""
+        self.__camera_enabled = bool(enabled)
+        if self.__debug:
+            print(f"Camera updated: {'ON' if self.__camera_enabled else 'OFF'}")
+    
+    def update_status(self, status):
+        """Update the robot status"""
+        self.__robot_status = str(status)
+        if self.__debug:
+            print(f"Status updated: {self.__robot_status}")
+    
+    def set_video_instance(self, video_instance):
+        """Set the video instance from external controller"""
+        self.__video = video_instance
+        if self.__debug:
+            print(f"Video instance set: {video_instance is not None}")
     
     def get_controller_status(self):
         """Get the current controller connection status"""
