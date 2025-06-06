@@ -1,3 +1,11 @@
 {
-    "python.languageServer": "Pylance"
+    "python.languageServer": "Pylance",
+    "python.linting.enabled": false,
+    "python.linting.pylintEnabled": false,
+    "python.defaultInterpreterPath": "/usr/bin/python3",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "off",
+    "pylint.enabled": false,
+    "pylint.lintOnTextChange": false,
+    "pylint.lintOnSave": false
 }
