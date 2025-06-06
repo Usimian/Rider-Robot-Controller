@@ -9,10 +9,11 @@ import json
 import time
 import threading
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 from typing import Optional, Callable, Dict, Any
 
 class RiderMQTT:
-    def __init__(self, robot=None, broker_host="localhost", broker_port=1883, debug=False):
+    def __init__(self, robot=None, broker_host="192.168.1.173", broker_port=1883, debug=False):
         self.__debug = debug
         self.__robot = robot
         self.__broker_host = broker_host
@@ -36,7 +37,7 @@ class RiderMQTT:
         
         # Current robot state
         self.__robot_state = {
-            'battery_level': 0,
+            'battery_level': None,  # Will be read from hardware on first read
             'speed_scale': 1.0,
             'roll_balance_enabled': False,
             'performance_mode_enabled': False,
@@ -48,6 +49,11 @@ class RiderMQTT:
             'height': 85,
             'connection_status': 'disconnected'
         }
+        
+        # Battery reading state
+        self.__battery_read_failures = 0
+        self.__max_battery_failures = 3  # Allow 3 failures before using last known good value
+        self.__last_known_battery = 50  # Reasonable default until first successful read
         
         # Command callbacks
         self.__command_callbacks = {}
@@ -81,7 +87,11 @@ class RiderMQTT:
     def connect(self) -> bool:
         """Connect to MQTT broker"""
         try:
-            self.__client = mqtt.Client(client_id=self.__client_id)
+            self.__client = mqtt.Client(
+                client_id=self.__client_id,
+                callback_api_version=CallbackAPIVersion.VERSION2,
+                protocol=mqtt.MQTTv5
+            )
             self.__client.on_connect = self.__on_connect
             self.__client.on_disconnect = self.__on_disconnect
             self.__client.on_message = self.__on_message
@@ -129,12 +139,12 @@ class RiderMQTT:
         if self.__debug:
             print("MQTT disconnected")
     
-    def __on_connect(self, client, userdata, flags, rc):
+    def __on_connect(self, client, userdata, flags, reason_code, properties):
         """Callback for MQTT connection"""
-        if rc == 0:
+        if reason_code == 0:
             self.__connected = True
             if self.__debug:
-                print("MQTT broker connected")
+                print("MQTT 5.0 broker connected")
             
             # Subscribe to control topics
             control_topics = [
@@ -151,13 +161,13 @@ class RiderMQTT:
                     print(f"Subscribed to: {topic}")
         else:
             if self.__debug:
-                print(f"MQTT connection failed with code: {rc}")
+                print(f"MQTT 5.0 connection failed with reason code: {reason_code}")
     
-    def __on_disconnect(self, client, userdata, rc):
+    def __on_disconnect(self, client, userdata, flags, reason_code, properties):
         """Callback for MQTT disconnection"""
         self.__connected = False
         if self.__debug:
-            print(f"MQTT broker disconnected with code: {rc}")
+            print(f"MQTT 5.0 broker disconnected with reason code: {reason_code}")
     
     def __on_message(self, client, userdata, msg):
         """Handle incoming MQTT messages"""
@@ -186,31 +196,148 @@ class RiderMQTT:
     
     def __handle_movement_command(self, payload: Dict[str, Any]):
         """Handle movement control commands"""
+        x = payload.get('x', 0)  # -100 to +100 (left/right)
+        y = payload.get('y', 0)  # -100 to +100 (backward/forward)
+        timestamp = payload.get('timestamp', time.time())
+        
+        if self.__debug:
+            print(f"🎮 Movement command: x={x}, y={y}, timestamp={timestamp}")
+        
+        # Convert x,y values (-100 to +100) to robot movement commands
+        if self.__robot:
+            try:
+                # Convert movement values to robot scale
+                # X axis: left/right movement (turning)
+                if x != 0:
+                    # Convert -100 to +100 range to robot turn values
+                    turn_value = int(x * 1.0)  # Adjust scaling as needed
+                    self.__robot.rider_turn(turn_value)
+                    if self.__debug:
+                        direction = "right" if x > 0 else "left"
+                        print(f"   ↔ Turning {direction} (value: {turn_value})")
+                
+                # Y axis: forward/backward movement
+                if y != 0:
+                    # Convert -100 to +100 range to robot speed values
+                    speed_value = y / 100.0 * self.__robot_state['speed_scale']
+                    self.__robot.rider_move_x(speed_value)
+                    if self.__debug:
+                        direction = "forward" if y > 0 else "backward"
+                        print(f"   ⬆ Moving {direction} (speed: {speed_value:.2f})")
+                
+                # Stop movement if both are zero
+                if x == 0 and y == 0:
+                    self.__robot.rider_move_x(0)
+                    self.__robot.rider_turn(0)
+                    if self.__debug:
+                        print("   ⏹ Stopping robot")
+                        
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ Error executing movement command: {e}")
+        
+        # Trigger callback if set
         if 'movement' in self.__command_callbacks:
             self.__command_callbacks['movement'](payload)
-        elif self.__debug:
-            print(f"Movement command received but no callback set: {payload}")
     
     def __handle_settings_command(self, payload: Dict[str, Any]):
         """Handle settings control commands"""
+        action = payload.get('action')
+        timestamp = payload.get('timestamp', time.time())
+        
+        if self.__debug:
+            print(f"⚙️ Settings command: {action}, timestamp={timestamp}")
+        
+        if self.__robot and action:
+            try:
+                if action == 'toggle_roll_balance':
+                    self.__robot_state['roll_balance_enabled'] = not self.__robot_state['roll_balance_enabled']
+                    self.__robot.rider_balance_roll(1 if self.__robot_state['roll_balance_enabled'] else 0)
+                    status = "enabled" if self.__robot_state['roll_balance_enabled'] else "disabled"
+                    if self.__debug:
+                        print(f"   🎯 Roll balance {status}")
+                
+                elif action == 'toggle_performance':
+                    self.__robot_state['performance_mode_enabled'] = not self.__robot_state['performance_mode_enabled']
+                    self.__robot.rider_perform(1 if self.__robot_state['performance_mode_enabled'] else 0)
+                    status = "enabled" if self.__robot_state['performance_mode_enabled'] else "disabled"
+                    if self.__debug:
+                        print(f"   🚀 Performance mode {status}")
+                
+                elif action == 'change_speed':
+                    new_speed = payload.get('value', 1.0)
+                    # Validate speed range (0.1 - 2.0)
+                    new_speed = max(0.1, min(2.0, new_speed))
+                    self.__robot_state['speed_scale'] = new_speed
+                    if self.__debug:
+                        print(f"   🏃 Speed changed to {new_speed}x")
+                
+                # Publish updated status after settings change
+                self.__publish_status()
+                
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ Error executing settings command: {e}")
+        
+        # Trigger callback if set
         if 'settings' in self.__command_callbacks:
             self.__command_callbacks['settings'](payload)
-        elif self.__debug:
-            print(f"Settings command received but no callback set: {payload}")
     
     def __handle_camera_command(self, payload: Dict[str, Any]):
         """Handle camera control commands"""
+        action = payload.get('action', 'toggle_camera')
+        timestamp = payload.get('timestamp', time.time())
+        
+        if self.__debug:
+            print(f"📷 Camera command: {action}, timestamp={timestamp}")
+        
+        if action == 'toggle_camera':
+            self.__robot_state['camera_enabled'] = not self.__robot_state['camera_enabled']
+            status = "enabled" if self.__robot_state['camera_enabled'] else "disabled"
+            if self.__debug:
+                print(f"   📹 Camera {status}")
+            
+            # Publish updated status after camera change
+            self.__publish_status()
+        
+        # Trigger callback if set
         if 'camera' in self.__command_callbacks:
             self.__command_callbacks['camera'](payload)
-        elif self.__debug:
-            print(f"Camera command received but no callback set: {payload}")
     
     def __handle_system_command(self, payload: Dict[str, Any]):
         """Handle system control commands"""
+        action = payload.get('action')
+        timestamp = payload.get('timestamp', time.time())
+        
+        if self.__debug:
+            print(f"🛑 System command: {action}, timestamp={timestamp}")
+        
+        if self.__robot and action == 'emergency_stop':
+            try:
+                if self.__debug:
+                    print("   🚨 EMERGENCY STOP - Stopping all movement")
+                
+                # Immediately stop all movement
+                self.__robot.rider_move_x(0)
+                self.__robot.rider_turn(0)
+                try:
+                    self.__robot.rider_move_y(0)
+                except:
+                    pass
+                
+                # Reset odometry for safety
+                self.__robot.rider_reset_odom()
+                
+                # Publish updated status after emergency stop
+                self.__publish_status()
+                
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ Error executing emergency stop: {e}")
+        
+        # Trigger callback if set
         if 'system' in self.__command_callbacks:
             self.__command_callbacks['system'](payload)
-        elif self.__debug:
-            print(f"System command received but no callback set: {payload}")
     
     def __handle_battery_request(self, payload: Dict[str, Any]):
         """Handle battery level request"""
@@ -290,6 +417,13 @@ class RiderMQTT:
         if not self.__connected:
             return
         
+        # Try to get real IMU data from robot if available
+        real_imu_data = self.__get_real_imu_data()
+        if real_imu_data:
+            self.__robot_state['roll'] = real_imu_data['roll']
+            self.__robot_state['pitch'] = real_imu_data['pitch']
+            self.__robot_state['yaw'] = real_imu_data['yaw']
+        
         imu_data = {
             'timestamp': time.time(),
             'roll': self.__robot_state['roll'],
@@ -299,18 +433,145 @@ class RiderMQTT:
         
         self.__publish_json(self.__topics['imu'], imu_data)
     
+    def __get_real_imu_data(self) -> Optional[Dict[str, float]]:
+        """Try to get real IMU data from robot hardware"""
+        if not self.__robot:
+            return None
+            
+        try:
+            # Try to read IMU data from robot
+            # Note: Specific method names may vary depending on xgo-toolkit version
+            try:
+                roll = self.__robot.read_roll() if hasattr(self.__robot, 'read_roll') else 0.0
+                pitch = self.__robot.read_pitch() if hasattr(self.__robot, 'read_pitch') else 0.0
+                yaw = self.__robot.read_yaw() if hasattr(self.__robot, 'read_yaw') else 0.0
+                
+                return {
+                    'roll': float(roll),
+                    'pitch': float(pitch),
+                    'yaw': float(yaw)
+                }
+            except AttributeError:
+                # Try alternative method names
+                try:
+                    imu_data = self.__robot.read_imu() if hasattr(self.__robot, 'read_imu') else None
+                    if imu_data and isinstance(imu_data, (list, tuple)) and len(imu_data) >= 3:
+                        return {
+                            'roll': float(imu_data[0]),
+                            'pitch': float(imu_data[1]),
+                            'yaw': float(imu_data[2])
+                        }
+                except:
+                    pass
+                return None
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️  MQTT: Error reading IMU data: {e}")
+            return None
+    
     def __publish_battery(self):
         """Publish battery information"""
         if not self.__connected:
             return
         
+        # Try to get real battery reading from robot if available
+        real_battery_level = self.__get_real_battery_level()
+        
+        # Handle battery reading logic with improved error recovery
+        if real_battery_level is not None:
+            # Successfully read battery - reset failure counter
+            self.__battery_read_failures = 0
+            self.__last_known_battery = real_battery_level
+            self.__robot_state['battery_level'] = real_battery_level
+            source = 'hardware'
+        else:
+            # Failed to read battery
+            self.__battery_read_failures += 1
+            
+            if self.__battery_read_failures <= self.__max_battery_failures:
+                # Use last known good value for a few failures
+                if self.__robot_state['battery_level'] is None:
+                    self.__robot_state['battery_level'] = self.__last_known_battery
+                source = 'cached'
+                if self.__debug:
+                    print(f"⚠️  Battery read failed ({self.__battery_read_failures}/{self.__max_battery_failures}), using cached value: {self.__robot_state['battery_level']}%")
+            else:
+                # Too many failures, use last known good value
+                self.__robot_state['battery_level'] = self.__last_known_battery
+                source = 'fallback'
+                if self.__debug:
+                    print(f"⚠️  Battery reading consistently failing, using fallback value: {self.__robot_state['battery_level']}%")
+        
+        # Ensure battery level is valid
+        battery_level = self.__robot_state['battery_level']
+        if battery_level is None:
+            battery_level = self.__last_known_battery
+        
+        # Clamp battery level to valid range
+        battery_level = max(0, min(100, battery_level))
+        self.__robot_state['battery_level'] = battery_level
+        
         battery_data = {
             'timestamp': time.time(),
-            'level': self.__robot_state['battery_level'],
-            'status': 'normal' if self.__robot_state['battery_level'] > 20 else 'low'
+            'level': battery_level,
+            'status': 'normal' if battery_level > 20 else 'low',
+            'source': source
         }
         
         self.__publish_json(self.__topics['battery'], battery_data)
+    
+    def __get_real_battery_level(self) -> Optional[int]:
+        """Try to get real battery level from robot hardware"""
+        if not self.__robot:
+            return None
+            
+        try:
+            battery_level = None
+            
+            # First try the rider-specific method
+            try:
+                raw_battery = self.__robot.rider_read_battery()
+                if raw_battery is not None:
+                    battery_level = int(raw_battery)
+                    if self.__debug:
+                        print(f"📊 MQTT Battery reading (rider method): {battery_level}%")
+            except AttributeError:
+                # Fallback to standard method
+                try:
+                    raw_battery = self.__robot.read_battery()
+                    if raw_battery is not None:
+                        battery_level = int(raw_battery)
+                        if self.__debug:
+                            print(f"📊 MQTT Battery reading (standard method): {battery_level}%")
+                except AttributeError:
+                    if self.__debug:
+                        print("⚠️  MQTT: Battery reading method not available")
+                    return None
+            
+            # Validate the reading
+            if battery_level is not None:
+                # Check for obviously invalid readings
+                if battery_level < 0:
+                    if self.__debug:
+                        print(f"⚠️  Invalid battery reading (negative): {battery_level}%, ignoring")
+                    return None
+                elif battery_level > 100:
+                    if self.__debug:
+                        print(f"⚠️  Invalid battery reading (>100%): {battery_level}%, clamping to 100%")
+                    return 100
+                else:
+                    return battery_level
+            else:
+                return None
+                
+        except (ValueError, TypeError) as e:
+            if self.__debug:
+                print(f"⚠️  MQTT: Invalid battery data format: {e}")
+            return None
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️  MQTT: Error reading battery: {e}")
+            return None
     
     def __publish_json(self, topic: str, data: Dict[str, Any]):
         """Publish JSON data to MQTT topic"""
@@ -354,8 +615,13 @@ class RiderMQTT:
             'host': self.__broker_host,
             'port': self.__broker_port,
             'connected': self.__connected,
-            'client_id': self.__client_id
+            'client_id': self.__client_id,
+            'protocol': 'MQTT 5.0'
         }
+    
+    def get_robot_state(self) -> Dict[str, Any]:
+        """Get current robot state"""
+        return self.__robot_state.copy()
     
     def cleanup(self):
         """Clean up MQTT resources"""

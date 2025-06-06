@@ -13,6 +13,7 @@ import pygame
 from xgo_toolkit import XGO
 from rider_screen import RiderScreen
 from rider_video import RiderVideo
+from rider_mqtt import RiderMQTT
 from key import Button
 
 class BluetoothController_Rider(object):
@@ -93,6 +94,11 @@ class BluetoothController_Rider(object):
         self.__screen_last_update = 0
         self.__screen_update_interval = 2.0  # Update screen every 2 seconds
         
+        # Initialize MQTT communication
+        self.__mqtt_client = None
+        self.__mqtt_last_update = 0
+        self.__mqtt_update_interval = 1.0  # Update MQTT state every second
+        
         # Add button reader
         self.__robot_button = Button()  # Screen button reader for the robot
 
@@ -128,9 +134,18 @@ class BluetoothController_Rider(object):
         if self.__screen and self.__video:
             self.__screen.set_video_instance(self.__video)
         
+        # Initialize MQTT communication system
+        self.__setup_mqtt()
+        
         # Read and display battery voltage if robot is connected (after screen is initialized)
         if self.__robot is not None:
             self.__check_battery_voltage()
+            
+            # Initialize MQTT with current battery level if available
+            if self.__mqtt_client:
+                current_battery = self.__read_battery_level()
+                if current_battery is not None:
+                    self.__mqtt_client.update_robot_state(battery_level=current_battery)
     
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
@@ -241,6 +256,133 @@ class BluetoothController_Rider(object):
             if self.__screen:
                 self.__screen.update_camera_status(False)
                 self.__screen.update_status("Camera Error")
+    
+    def __setup_mqtt(self):
+        """Initialize MQTT communication system"""
+        try:
+            print("📡 Initializing MQTT communication...")
+            self.__mqtt_client = RiderMQTT(robot=self.__robot, debug=self.__debug)
+            
+            # Set up command callbacks for remote control
+            self.__mqtt_client.set_command_callback('movement', self.__handle_mqtt_movement)
+            self.__mqtt_client.set_command_callback('settings', self.__handle_mqtt_settings)
+            self.__mqtt_client.set_command_callback('camera', self.__handle_mqtt_camera)
+            self.__mqtt_client.set_command_callback('system', self.__handle_mqtt_system)
+            
+            # Connect to MQTT broker
+            if self.__mqtt_client.connect():
+                print("✅ MQTT communication enabled")
+                if self.__screen:
+                    self.__screen.update_status("MQTT: Connected")
+            else:
+                print("⚠️  MQTT broker connection failed")
+                if self.__screen:
+                    self.__screen.update_status("MQTT: Failed")
+                    
+        except Exception as e:
+            print(f"⚠️  Failed to initialize MQTT: {e}")
+            self.__mqtt_client = None
+            if self.__screen:
+                self.__screen.update_status("MQTT: Error")
+    
+    def __handle_mqtt_movement(self, payload):
+        """Handle movement commands from MQTT"""
+        if self.__debug:
+            print(f"🎮 MQTT Movement command: {payload}")
+        
+        # The actual movement is already handled in rider_mqtt.py
+        # This callback is for additional controller-specific logic
+        x = payload.get('x', 0)
+        y = payload.get('y', 0)
+        
+        # Update screen with remote control status
+        if self.__screen:
+            if x != 0 or y != 0:
+                self.__screen.update_status("Remote Control")
+            else:
+                self.__screen.update_status("MQTT: Connected")
+        
+    def __handle_mqtt_settings(self, payload):
+        """Handle settings commands from MQTT"""
+        if self.__debug:
+            print(f"⚙️  MQTT Settings command: {payload}")
+        
+        # The actual settings changes are handled in rider_mqtt.py
+        # Update the controller's local state to match
+        action = payload.get('action')
+        
+        if action == 'toggle_roll_balance':
+            # Sync local state with MQTT state
+            if self.__mqtt_client:
+                robot_state = self.__mqtt_client.get_robot_state()
+                self.__roll_balance_enabled = robot_state['roll_balance_enabled']
+                if self.__screen:
+                    self.__screen.update_roll_balance(self.__roll_balance_enabled)
+        
+        elif action == 'toggle_performance':
+            # Sync local state with MQTT state
+            if self.__mqtt_client:
+                robot_state = self.__mqtt_client.get_robot_state()
+                self.__performance_mode_enabled = robot_state['performance_mode_enabled']
+                if self.__screen:
+                    self.__screen.update_performance_mode(self.__performance_mode_enabled)
+        
+        elif action == 'change_speed':
+            # Sync local state with MQTT state
+            if self.__mqtt_client:
+                robot_state = self.__mqtt_client.get_robot_state()
+                self.__speed_scale = robot_state['speed_scale']
+                if self.__screen:
+                    self.__screen.update_speed(self.__speed_scale)
+        
+    def __handle_mqtt_camera(self, payload):
+        """Handle camera commands from MQTT"""
+        if self.__debug:
+            print(f"📷 MQTT Camera command: {payload}")
+        
+        # The actual camera toggle is handled in rider_mqtt.py
+        # Update the controller's local state to match
+        action = payload.get('action', 'toggle_camera')
+        
+        if action == 'toggle_camera':
+            # Sync local state with MQTT state
+            if self.__mqtt_client:
+                robot_state = self.__mqtt_client.get_robot_state()
+                self.__camera_enabled = robot_state['camera_enabled']
+                
+                # Actually toggle the camera hardware
+                if self.__video and self.__video.is_camera_available():
+                    if self.__camera_enabled:
+                        if self.__video.start_streaming():
+                            if self.__screen:
+                                self.__screen.update_camera_status(True)
+                                self.__screen.update_status("Camera: ON")
+                        else:
+                            self.__camera_enabled = False
+                            if self.__screen:
+                                self.__screen.update_camera_status(False)
+                                self.__screen.update_status("Camera Failed")
+                    else:
+                        self.__video.stop_streaming()
+                        if self.__screen:
+                            self.__screen.update_camera_status(False)
+                            self.__screen.update_status("Camera: OFF")
+        
+    def __handle_mqtt_system(self, payload):
+        """Handle system commands from MQTT"""
+        if self.__debug:
+            print(f"🔧 MQTT System command: {payload}")
+        
+        # The actual system commands are handled in rider_mqtt.py
+        # Update screen status for system commands
+        action = payload.get('action')
+        
+        if action == 'emergency_stop':
+            if self.__screen:
+                self.__screen.update_status("EMERGENCY STOP!")
+            
+            # Clear any ongoing action in the controller
+            self.__action_in_progress = False
     
     def __toggle_camera(self):
         """Toggle camera on/off"""
@@ -476,6 +618,36 @@ class BluetoothController_Rider(object):
                 self.__screen.update_battery(battery_level)
         else:
             print("❌ Could not read battery level")
+    
+    def __update_mqtt_state(self):
+        """Update MQTT with current robot state"""
+        if not self.__mqtt_client or not self.__mqtt_client.is_connected():
+            return
+            
+        try:
+            # Get current battery level
+            current_battery = self.__read_battery_level()
+            if current_battery is None:
+                current_battery = 0
+            
+            # Update MQTT with current robot state
+            self.__mqtt_client.update_robot_state(
+                battery_level=current_battery,
+                speed_scale=self.__speed_scale,
+                roll_balance_enabled=self.__roll_balance_enabled,
+                performance_mode_enabled=self.__performance_mode_enabled,
+                camera_enabled=self.__camera_enabled,
+                controller_connected=self.__controller_connected,
+                height=self.__height,
+                connection_status='connected' if self.__controller_connected else 'disconnected'
+            )
+            
+            if self.__debug:
+                print(f"📡 MQTT state updated - Battery: {current_battery}%, Speed: {self.__speed_scale:.1f}x")
+                
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️  Error updating MQTT state: {e}")
     
     def __process_movement(self, left_stick_x, left_stick_y, right_stick_x, right_stick_y):
         """Process analog stick movements for robot control"""
@@ -904,6 +1076,15 @@ class BluetoothController_Rider(object):
                         if self.__debug:
                             print(f"Screen update error: {e}")
                 
+                # Update MQTT state periodically
+                if self.__mqtt_client and time.time() - self.__mqtt_last_update >= self.__mqtt_update_interval:
+                    try:
+                        self.__update_mqtt_state()
+                        self.__mqtt_last_update = time.time()
+                    except Exception as e:
+                        if self.__debug:
+                            print(f"MQTT update error: {e}")
+                
                 # Control loop frequency (50Hz)
                 clock.tick(50)
                 
@@ -998,6 +1179,14 @@ class BluetoothController_Rider(object):
                 self.__screen.cleanup()
             except Exception as e:
                 print(f"⚠️  Error turning off LCD screen: {e}")
+        
+        # Clean up MQTT
+        if self.__mqtt_client:
+            try:
+                self.__mqtt_client.cleanup()
+                print("✅ MQTT communication stopped")
+            except Exception as e:
+                print(f"⚠️  Error cleaning up MQTT: {e}")
         
         if self.__controller_connected:
             self.__controller.quit()
