@@ -9,6 +9,7 @@
 import time
 import sys
 import os
+import psutil
 import xgoscreen.LCD_2inch as LCD_2inch
 from PIL import Image, ImageDraw, ImageFont
 from key import Button
@@ -45,6 +46,12 @@ class RiderScreen:
         self.__roll = 0.0
         self.__pitch = 0.0
         self.__yaw = 0.0
+        
+        # CPU load data
+        self.__cpu_load_1min = 0.0
+        self.__cpu_load_5min = 0.0
+        self.__cpu_load_15min = 0.0
+        self.__cpu_percent = 0.0
         
         # Video settings
         self.__video = None
@@ -252,6 +259,37 @@ class RiderScreen:
         odom_text = f"Yaw: {self.__yaw:+0.1f}°"
         self.__draw_text(x, y+50, odom_text, self.__color_yellow, self.__font_medium)
     
+    def __draw_cpu_info(self, x, y):
+        """Draw CPU load information above the video window"""
+        # CPU usage percentage
+        cpu_color = self.__color_green if self.__cpu_percent < 50 else (self.__color_yellow if self.__cpu_percent < 80 else self.__color_red)
+        cpu_text = f"CPU: {self.__cpu_percent:.1f}%"
+        self.__draw_text(x, y, cpu_text, cpu_color, self.__font_medium)
+        
+        # Load averages (1min, 5min, 15min)
+        load_color = self.__color_green if self.__cpu_load_1min < 1.0 else (self.__color_yellow if self.__cpu_load_1min < 2.0 else self.__color_red)
+        load_text = f"Load: {self.__cpu_load_1min:.2f}"
+        self.__draw_text(x, y+20, load_text, load_color, self.__font_small)
+    
+    def __read_cpu_data(self):
+        """Read CPU load and usage data"""
+        try:
+            # Get CPU usage percentage (non-blocking)
+            self.__cpu_percent = psutil.cpu_percent(interval=None)
+            
+            # Get load averages
+            load_avg = os.getloadavg()
+            self.__cpu_load_1min = load_avg[0]
+            self.__cpu_load_5min = load_avg[1]
+            self.__cpu_load_15min = load_avg[2]
+        except Exception as e:
+            if self.__debug:
+                print(f"Error reading CPU data: {e}")
+            self.__cpu_percent = 0.0
+            self.__cpu_load_1min = 0.0
+            self.__cpu_load_5min = 0.0
+            self.__cpu_load_15min = 0.0
+    
     def __draw_button_labels(self):
         """Draw labels for the physical buttons around the screen"""
         # A button (lower right) - "Quit"
@@ -313,6 +351,9 @@ class RiderScreen:
         
         # Draw odometry information above the video window
         self.__draw_odometry_info(20, video_y - 40)
+        
+        # Draw CPU information above the video window  
+        self.__draw_cpu_info(150, video_y - 40)
         
         # Draw button labels
         self.__draw_button_labels()
@@ -397,6 +438,9 @@ class RiderScreen:
                 
                 # Read odometry data
                 self.__read_odometry_data()
+                
+                # Read CPU data
+                self.__read_cpu_data()
                     
             except Exception as e:
                 if self.__debug:
@@ -414,6 +458,9 @@ class RiderScreen:
         # Use external controller status if provided (from main controller)
         if external_controller_status is not None:
             self.set_external_controller_status(external_controller_status)
+        
+        # Always read CPU data regardless of robot connection
+        self.__read_cpu_data()
         
         self.refresh_from_robot()
         self.__update_display()

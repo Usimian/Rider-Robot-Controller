@@ -8,6 +8,8 @@
 import json
 import time
 import threading
+import os
+import psutil
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 from typing import Optional, Callable, Dict, Any
@@ -47,7 +49,11 @@ class RiderMQTT:
             'pitch': 0.0,
             'yaw': 0.0,
             'height': 85,
-            'connection_status': 'disconnected'
+            'connection_status': 'disconnected',
+            'cpu_percent': 0.0,
+            'cpu_load_1min': 0.0,
+            'cpu_load_5min': 0.0,
+            'cpu_load_15min': 0.0
         }
         
         # Battery reading state
@@ -399,6 +405,9 @@ class RiderMQTT:
         if not self.__connected:
             return
         
+        # Update CPU data before publishing
+        self.__get_cpu_data()
+        
         status_data = {
             'timestamp': time.time(),
             'speed_scale': self.__robot_state['speed_scale'],
@@ -407,7 +416,11 @@ class RiderMQTT:
             'camera_enabled': self.__robot_state['camera_enabled'],
             'controller_connected': self.__robot_state['controller_connected'],
             'height': self.__robot_state['height'],
-            'connection_status': self.__robot_state['connection_status']
+            'connection_status': self.__robot_state['connection_status'],
+            'cpu_percent': self.__robot_state['cpu_percent'],
+            'cpu_load_1min': self.__robot_state['cpu_load_1min'],
+            'cpu_load_5min': self.__robot_state['cpu_load_5min'],
+            'cpu_load_15min': self.__robot_state['cpu_load_15min']
         }
         
         self.__publish_json(self.__topics['status'], status_data)
@@ -572,6 +585,30 @@ class RiderMQTT:
             if self.__debug:
                 print(f"⚠️  MQTT: Error reading battery: {e}")
             return None
+    
+    def __get_cpu_data(self):
+        """Read current CPU usage and load average data"""
+        try:
+            # Get CPU usage percentage (non-blocking)
+            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=None)
+            
+            # Get load averages
+            load_avg = os.getloadavg()
+            self.__robot_state['cpu_load_1min'] = load_avg[0]
+            self.__robot_state['cpu_load_5min'] = load_avg[1]
+            self.__robot_state['cpu_load_15min'] = load_avg[2]
+            
+            if self.__debug:
+                print(f"📊 CPU: {self.__robot_state['cpu_percent']:.1f}%, Load: {self.__robot_state['cpu_load_1min']:.2f}")
+                
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️  MQTT: Error reading CPU data: {e}")
+            # Set default values on error
+            self.__robot_state['cpu_percent'] = 0.0
+            self.__robot_state['cpu_load_1min'] = 0.0
+            self.__robot_state['cpu_load_5min'] = 0.0
+            self.__robot_state['cpu_load_15min'] = 0.0
     
     def __publish_json(self, topic: str, data: Dict[str, Any]):
         """Publish JSON data to MQTT topic"""
