@@ -958,6 +958,16 @@ class BluetoothController_Rider(object):
                             # Override screen's controller detection with main controller status
                             self.__screen.set_external_controller_status(False)
                         
+                        # Immediately update MQTT with disconnect status before entering waiting mode
+                        if self.__mqtt_client:
+                            try:
+                                self.__update_mqtt_state()
+                                if self.__debug:
+                                    print("📡 MQTT immediately updated with controller disconnect status")
+                            except Exception as e:
+                                if self.__debug:
+                                    print(f"Error updating MQTT on disconnect: {e}")
+                        
                         # Enter waiting mode
                         self._enter_controller_waiting_mode()
                 
@@ -1055,6 +1065,17 @@ class BluetoothController_Rider(object):
                     except pygame.error:  # type: ignore
                         print("🔴 Controller hardware disconnected!")
                         self.__controller_connected = False
+                        
+                        # Immediately update MQTT with disconnect status
+                        if self.__mqtt_client:
+                            try:
+                                self.__update_mqtt_state()
+                                if self.__debug:
+                                    print("📡 MQTT updated after pygame error disconnect")
+                            except Exception as e:
+                                if self.__debug:
+                                    print(f"Error updating MQTT after pygame error: {e}")
+                        
                         # Don't return here - let the next iteration handle it in waiting mode
                         continue
 
@@ -1107,10 +1128,21 @@ class BluetoothController_Rider(object):
         print("   Move any stick or press any button to reconnect")
         print("   Press robot A button (Quit) or Ctrl+C to exit")
         
+        # Immediately update MQTT with disconnected status
+        if self.__mqtt_client:
+            try:
+                self.__update_mqtt_state()
+                if self.__debug:
+                    print("📡 MQTT updated with controller disconnect status")
+            except Exception as e:
+                if self.__debug:
+                    print(f"Error updating MQTT during disconnect: {e}")
+        
         # Wait for controller to reconnect indefinitely
         wait_start_time = time.time()
         wait_check_interval = 1.0  # Check every second while waiting
         last_wait_check = time.time()
+        last_mqtt_update = time.time()
         
         while not self.__controller_connected and self.__running:
             wait_current_time = time.time()
@@ -1142,6 +1174,17 @@ class BluetoothController_Rider(object):
                         if self.__debug:
                             print(f"Screen update error while waiting: {e}")
             
+            # Continue MQTT updates even while waiting for controller
+            if self.__mqtt_client and wait_current_time - last_mqtt_update >= self.__mqtt_update_interval:
+                try:
+                    self.__update_mqtt_state()
+                    last_mqtt_update = wait_current_time
+                    if self.__debug:
+                        print("📡 MQTT state updated during controller wait (disconnected)")
+                except Exception as e:
+                    if self.__debug:
+                        print(f"Error updating MQTT during wait: {e}")
+            
             # Sleep briefly to prevent excessive CPU usage
             time.sleep(0.1)
         
@@ -1151,6 +1194,17 @@ class BluetoothController_Rider(object):
             if self.__screen:
                 # Update screen with reconnected controller status
                 self.__screen.set_external_controller_status(True)
+            
+            # Immediately update MQTT with reconnected status
+            if self.__mqtt_client:
+                try:
+                    self.__update_mqtt_state()
+                    if self.__debug:
+                        print("📡 MQTT updated with controller reconnect status")
+                except Exception as e:
+                    if self.__debug:
+                        print(f"Error updating MQTT during reconnect: {e}")
+            
             # Reset last activity time
             self.__last_controller_activity = time.time()
     
