@@ -51,9 +51,7 @@ class RiderMQTT:
             'height': 85,
             'connection_status': 'disconnected',
             'cpu_percent': 0.0,
-            'cpu_load_1min': 0.0,
-            'cpu_load_5min': 0.0,
-            'cpu_load_15min': 0.0
+            'cpu_load_1min': 0.0
         }
         
         # Battery reading state
@@ -418,9 +416,7 @@ class RiderMQTT:
             'height': self.__robot_state['height'],
             'connection_status': self.__robot_state['connection_status'],
             'cpu_percent': self.__robot_state['cpu_percent'],
-            'cpu_load_1min': self.__robot_state['cpu_load_1min'],
-            'cpu_load_5min': self.__robot_state['cpu_load_5min'],
-            'cpu_load_15min': self.__robot_state['cpu_load_15min']
+            'cpu_load_1min': self.__robot_state['cpu_load_1min']
         }
         
         self.__publish_json(self.__topics['status'], status_data)
@@ -589,14 +585,13 @@ class RiderMQTT:
     def __get_cpu_data(self):
         """Read current CPU usage and load average data"""
         try:
-            # Get CPU usage percentage (non-blocking)
-            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=None)
+            # Get CPU usage percentage with short interval for accuracy
+            # Using 0.1 second interval for more reliable readings
+            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=0.1)
             
-            # Get load averages
+            # Get load average (1 minute only)
             load_avg = os.getloadavg()
             self.__robot_state['cpu_load_1min'] = load_avg[0]
-            self.__robot_state['cpu_load_5min'] = load_avg[1]
-            self.__robot_state['cpu_load_15min'] = load_avg[2]
             
             if self.__debug:
                 print(f"📊 CPU: {self.__robot_state['cpu_percent']:.1f}%, Load: {self.__robot_state['cpu_load_1min']:.2f}")
@@ -607,8 +602,6 @@ class RiderMQTT:
             # Set default values on error
             self.__robot_state['cpu_percent'] = 0.0
             self.__robot_state['cpu_load_1min'] = 0.0
-            self.__robot_state['cpu_load_5min'] = 0.0
-            self.__robot_state['cpu_load_15min'] = 0.0
     
     def __publish_json(self, topic: str, data: Dict[str, Any]):
         """Publish JSON data to MQTT topic"""

@@ -1283,6 +1283,27 @@ if __name__ == "__main__":
     try:
         robot = XGO(port='/dev/ttyS0', version="xgorider")
         print("✅ Robot connected successfully!")
+        
+        # Read and display firmware and library versions
+        try:
+            firmware_version = robot.rider_read_firmware()
+            print(f"📋 Firmware Version: {firmware_version}")
+        except AttributeError:
+            # Fallback to standard method if rider-specific method doesn't exist
+            try:
+                firmware_version = robot.read_firmware()
+                print(f"📋 Firmware Version: {firmware_version}")
+            except Exception as e:
+                print(f"⚠️  Could not read firmware version: {e}")
+        except Exception as e:
+            print(f"⚠️  Could not read firmware version: {e}")
+        
+        try:
+            lib_version = robot.read_lib_version()
+            print(f"📚 Library Version: {lib_version}")
+        except Exception as e:
+            print(f"⚠️  Could not read library version: {e}")
+            
     except Exception as e:
         print(f"❌ Failed to connect to robot: {e}")
         print("   • Check robot is powered on")

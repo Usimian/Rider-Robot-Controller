@@ -49,8 +49,6 @@ class RiderScreen:
         
         # CPU load data
         self.__cpu_load_1min = 0.0
-        self.__cpu_load_5min = 0.0
-        self.__cpu_load_15min = 0.0
         self.__cpu_percent = 0.0
         
         # Video settings
@@ -260,35 +258,73 @@ class RiderScreen:
         self.__draw_text(x, y+50, odom_text, self.__color_yellow, self.__font_medium)
     
     def __draw_cpu_info(self, x, y):
-        """Draw CPU load information above the video window"""
-        # CPU usage percentage
-        cpu_color = self.__color_green if self.__cpu_percent < 50 else (self.__color_yellow if self.__cpu_percent < 80 else self.__color_red)
-        cpu_text = f"CPU: {self.__cpu_percent:.1f}%"
-        self.__draw_text(x, y, cpu_text, cpu_color, self.__font_medium)
+        """Draw CPU percentage and load as two horizontal bars above the video window"""
+        bar_width = 100  # Total bar width (reduced to fit two bars)
+        bar_height = 10  # Bar height (reduced slightly)
         
-        # Load averages (1min, 5min, 15min)
-        load_color = self.__color_green if self.__cpu_load_1min < 1.0 else (self.__color_yellow if self.__cpu_load_1min < 2.0 else self.__color_red)
-        load_text = f"Load: {self.__cpu_load_1min:.2f}"
-        self.__draw_text(x, y+20, load_text, load_color, self.__font_small)
+        # CPU Percentage Bar
+        cpu_ratio = min(self.__cpu_percent / 100.0, 1.0)  # 0% to 100% maps to 0% to 100%
+        cpu_fill_width = int(bar_width * cpu_ratio)
+        
+        # Determine CPU color based on usage level
+        if self.__cpu_percent < 50:
+            cpu_color = self.__color_green
+        elif self.__cpu_percent < 80:
+            cpu_color = self.__color_yellow
+        else:
+            cpu_color = self.__color_red
+        
+        # Draw CPU bar outline
+        self.__draw_rect(x, y, bar_width, bar_height, self.__color_white, filled=False)
+        
+        # Draw CPU filled portion
+        if cpu_fill_width > 0:
+            self.__draw_rect(x + 1, y + 1, cpu_fill_width - 2, bar_height - 2, cpu_color, filled=True)
+        
+        # Draw CPU value text next to bar
+        cpu_text = f"CPU {self.__cpu_percent:.0f}%"
+        self.__draw_text(x + bar_width + 5, y - 2, cpu_text, cpu_color, self.__font_small)
+        
+        # Load Bar (positioned below CPU bar)
+        load_y = y + bar_height + 5  # 5 pixels spacing between bars
+        
+        # Calculate fill percentage (0.0 to 4.0 maps to 0% to 100%)
+        load_ratio = min(self.__cpu_load_1min / 4.0, 1.0)  # Cap at 100%
+        load_fill_width = int(bar_width * load_ratio)
+        
+        # Determine load color based on load level
+        if self.__cpu_load_1min < 1.0:
+            load_color = self.__color_green
+        elif self.__cpu_load_1min < 3.0:
+            load_color = self.__color_yellow
+        else:
+            load_color = self.__color_red
+        
+        # Draw load bar outline
+        self.__draw_rect(x, load_y, bar_width, bar_height, self.__color_white, filled=False)
+        
+        # Draw load filled portion
+        if load_fill_width > 0:
+            self.__draw_rect(x + 1, load_y + 1, load_fill_width - 2, bar_height - 2, load_color, filled=True)
+        
+        # Draw load value text next to bar
+        load_text = f"Load {self.__cpu_load_1min:.2f}"
+        self.__draw_text(x + bar_width + 5, load_y - 2, load_text, load_color, self.__font_small)
     
     def __read_cpu_data(self):
         """Read CPU load and usage data"""
         try:
-            # Get CPU usage percentage (non-blocking)
-            self.__cpu_percent = psutil.cpu_percent(interval=None)
+            # Get CPU usage percentage with short interval for accuracy
+            self.__cpu_percent = psutil.cpu_percent(interval=0.1)
             
-            # Get load averages
+            # Get load average (1 minute only)
             load_avg = os.getloadavg()
             self.__cpu_load_1min = load_avg[0]
-            self.__cpu_load_5min = load_avg[1]
-            self.__cpu_load_15min = load_avg[2]
         except Exception as e:
             if self.__debug:
                 print(f"Error reading CPU data: {e}")
             self.__cpu_percent = 0.0
             self.__cpu_load_1min = 0.0
-            self.__cpu_load_5min = 0.0
-            self.__cpu_load_15min = 0.0
     
     def __draw_button_labels(self):
         """Draw labels for the physical buttons around the screen"""
@@ -352,7 +388,7 @@ class RiderScreen:
         # Draw odometry information above the video window
         self.__draw_odometry_info(20, video_y - 40)
         
-        # Draw CPU information above the video window  
+        # Draw CPU and load bars above the video window (now takes more space)
         self.__draw_cpu_info(150, video_y - 40)
         
         # Draw button labels
