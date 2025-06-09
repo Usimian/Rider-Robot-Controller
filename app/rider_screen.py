@@ -47,6 +47,20 @@ class RiderScreen:
         self.__pitch = 0.0
         self.__yaw = 0.0
         
+        # Sensor reading error tracking
+        self.__sensor_read_failures = 0
+        self.__max_sensor_failures = 3  # Allow 3 failures before showing 0
+        self.__last_good_roll = 0.0
+        self.__last_good_pitch = 0.0
+        self.__last_good_yaw = 0.0
+        self.__last_good_battery = 50
+        self.__battery_read_failures = 0
+        self.__max_battery_failures = 5  # Allow more failures for battery since it's less critical
+        
+        # Success tracking for recovery
+        self.__consecutive_successful_reads = 0
+        self.__reset_failure_count_threshold = 10  # Reset failure counters after 10 successful reads
+        
         # CPU load data
         self.__cpu_load_1min = 0.0
         self.__cpu_percent = 0.0
@@ -388,6 +402,13 @@ class RiderScreen:
         # Draw odometry information above the video window
         self.__draw_odometry_info(20, video_y - 40)
         
+        # Show sensor status if there are issues (debug info)
+        if self.__debug or self.__sensor_read_failures > 0 or self.__battery_read_failures > 0:
+            status_text = f"S:{self.__sensor_read_failures} B:{self.__battery_read_failures}"
+            if self.__consecutive_successful_reads > 0:
+                status_text += f" OK:{self.__consecutive_successful_reads}"
+            self.__draw_text(220, video_y - 15, status_text, self.__color_yellow, self.__font_small)
+        
         # Draw CPU and load bars above the video window (now takes more space)
         self.__draw_cpu_info(150, video_y - 40)
         
@@ -450,27 +471,41 @@ class RiderScreen:
                 # Try to read battery level using consolidated method
                 battery_level = None
                 
-                # First try to use controller's battery reading method if we have a reference to it
-                # For now, use the existing robot methods but consolidate the logic
-                try:
-                    battery_level = self.__robot.rider_read_battery()
-                except AttributeError:
-                    # Fallback to standard method
-                    try:
-                        battery_level = self.__robot.read_battery()
-                    except AttributeError:
-                        battery_level = 0
-                except Exception:
-                    # Final fallback
-                    try:
-                        battery_level = self.__robot.read_battery()
-                    except:
-                        battery_level = 0
+                # Read battery with retry logic
+                battery_level = None
                 
+                # Try rider-specific method first
+                if hasattr(self.__robot, 'rider_read_battery'):
+                    battery_level = self.__read_sensor_with_retry('battery', self.__robot.rider_read_battery)
+                elif hasattr(self.__robot, 'read_battery'):
+                    battery_level = self.__read_sensor_with_retry('battery', self.__robot.read_battery)
+                
+                # Handle battery reading with better error recovery
                 if battery_level is not None and battery_level > 0:
+                    # Successful battery reading
+                    self.__battery_read_failures = 0
+                    self.__last_good_battery = int(battery_level)
                     self.update_battery(battery_level)
+                    
+                    if self.__debug:
+                        print(f"✅ Battery reading successful: {battery_level}%")
                 else:
-                    self.update_battery(0)
+                    # Failed battery reading
+                    self.__battery_read_failures += 1
+                    self.__consecutive_successful_reads = 0
+                    
+                    if self.__battery_read_failures <= self.__max_battery_failures:
+                        # Use last good battery value for a few failures
+                        self.update_battery(self.__last_good_battery)
+                        
+                        if self.__debug:
+                            print(f"⚠️  Battery read failed ({self.__battery_read_failures}/{self.__max_battery_failures}), using cached value: {self.__last_good_battery}%")
+                    else:
+                        # Too many failures - show 0
+                        self.update_battery(0)
+                        
+                        if self.__debug:
+                            print(f"❌ Battery consistently failing ({self.__battery_read_failures} failures), showing 0%")
                 
                 # Read odometry data
                 self.__read_odometry_data()
@@ -536,30 +571,103 @@ class RiderScreen:
             except:
                 pass
     
+    def __read_sensor_with_retry(self, sensor_name, sensor_func, max_retries=2):
+        """Read sensor data with retry logic and error handling"""
+        for attempt in range(max_retries + 1):
+            try:
+                value = sensor_func()
+                if value is not None:
+                    return float(value)
+            except Exception as e:
+                if self.__debug and attempt == max_retries:
+                    print(f"⚠️  Failed to read {sensor_name} after {max_retries + 1} attempts: {e}")
+                if attempt < max_retries:
+                    time.sleep(0.05)  # Brief delay before retry
+        return None
+
     def __read_odometry_data(self):
-        """Read odometry/IMU data from robot"""
+        """Read odometry/IMU data from robot with improved error handling"""
         if self.__robot is not None:
             try:
-                # Try to read IMU data (roll, pitch, yaw) as odometry substitute
-                try:
-                    self.__roll = self.__robot.rider_read_roll() if hasattr(self.__robot, 'rider_read_roll') else self.__robot.read_roll()
-                except (AttributeError, Exception):
-                    self.__roll = 0.0
+                # Try to read IMU data with retry logic
+                new_roll = None
+                new_pitch = None
+                new_yaw = None
                 
-                try:
-                    self.__pitch = self.__robot.rider_read_pitch() if hasattr(self.__robot, 'rider_read_pitch') else self.__robot.read_pitch()
-                except (AttributeError, Exception):
-                    self.__pitch = 0.0
+                # Read roll with retry
+                if hasattr(self.__robot, 'rider_read_roll'):
+                    new_roll = self.__read_sensor_with_retry('roll', self.__robot.rider_read_roll)
+                elif hasattr(self.__robot, 'read_roll'):
+                    new_roll = self.__read_sensor_with_retry('roll', self.__robot.read_roll)
                 
-                try:
-                    self.__yaw = self.__robot.rider_read_yaw() if hasattr(self.__robot, 'rider_read_yaw') else self.__robot.read_yaw()
-                except (AttributeError, Exception):
-                    self.__yaw = 0.0
+                # Read pitch with retry
+                if hasattr(self.__robot, 'rider_read_pitch'):
+                    new_pitch = self.__read_sensor_with_retry('pitch', self.__robot.rider_read_pitch)
+                elif hasattr(self.__robot, 'read_pitch'):
+                    new_pitch = self.__read_sensor_with_retry('pitch', self.__robot.read_pitch)
+                
+                # Read yaw with retry
+                if hasattr(self.__robot, 'rider_read_yaw'):
+                    new_yaw = self.__read_sensor_with_retry('yaw', self.__robot.rider_read_yaw)
+                elif hasattr(self.__robot, 'read_yaw'):
+                    new_yaw = self.__read_sensor_with_retry('yaw', self.__robot.read_yaw)
+                
+                # Handle successful vs failed readings
+                all_readings_successful = all(val is not None for val in [new_roll, new_pitch, new_yaw])
+                
+                if all_readings_successful:
+                    # All readings successful - update values and reset failure counter
+                    self.__roll = new_roll
+                    self.__pitch = new_pitch
+                    self.__yaw = new_yaw
+                    self.__last_good_roll = new_roll
+                    self.__last_good_pitch = new_pitch
+                    self.__last_good_yaw = new_yaw
+                    self.__sensor_read_failures = 0
                     
-                if self.__debug:
-                    print(f"Odometry data - Roll: {self.__roll:.1f}°, Pitch: {self.__pitch:.1f}°, Yaw: {self.__yaw:.1f}°")
+                    # Track consecutive successful reads for recovery
+                    self.__consecutive_successful_reads += 1
+                    
+                    # Reset all failure counters after sustained success
+                    if self.__consecutive_successful_reads >= self.__reset_failure_count_threshold:
+                        self.__sensor_read_failures = 0
+                        self.__battery_read_failures = 0
+                        self.__consecutive_successful_reads = 0
+                        if self.__debug:
+                            print("🔄 Failure counters reset after sustained success")
+                    
+                    if self.__debug:
+                        print(f"✅ IMU data - Roll: {self.__roll:.1f}°, Pitch: {self.__pitch:.1f}°, Yaw: {self.__yaw:.1f}°")
+                else:
+                    # Some readings failed - increment failure counter and reset success counter
+                    self.__sensor_read_failures += 1
+                    self.__consecutive_successful_reads = 0
+                    
+                    if self.__sensor_read_failures <= self.__max_sensor_failures:
+                        # Use last good values for a few failures
+                        self.__roll = self.__last_good_roll
+                        self.__pitch = self.__last_good_pitch
+                        self.__yaw = self.__last_good_yaw
+                        
+                        if self.__debug:
+                            print(f"⚠️  IMU read failed ({self.__sensor_read_failures}/{self.__max_sensor_failures}), using cached values")
+                    else:
+                        # Too many failures - show zeros
+                        self.__roll = self.__pitch = self.__yaw = 0.0
+                        
+                        if self.__debug:
+                            print(f"❌ IMU consistently failing ({self.__sensor_read_failures} failures), showing zeros")
                     
             except Exception as e:
+                self.__sensor_read_failures += 1
+                self.__consecutive_successful_reads = 0
                 if self.__debug:
-                    print(f"Error reading odometry data: {e}")
-                self.__roll = self.__pitch = self.__yaw = 0.0 
+                    print(f"❌ Error reading odometry data: {e}")
+                
+                # Use cached values if available, otherwise use zeros
+                if self.__sensor_read_failures <= self.__max_sensor_failures:
+                    self.__roll = self.__last_good_roll
+                    self.__pitch = self.__last_good_pitch
+                    self.__yaw = self.__last_good_yaw
+                else:
+                    self.__roll = self.__pitch = self.__yaw = 0.0 

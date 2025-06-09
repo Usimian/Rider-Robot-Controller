@@ -150,8 +150,8 @@ class BluetoothController_Rider(object):
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
         try:
-            pygame.init()  # type: ignore
-            pygame.joystick.init()  # type: ignore
+            pygame.init()
+            pygame.joystick.init()
             
             # PYGAME 2.6.1 FIX - Force refresh joystick detection
             pygame.joystick.quit()
@@ -907,7 +907,40 @@ class BluetoothController_Rider(object):
             
         elif self.__robot_button.press_c():  # C button is on the upper left side of the screen
             print("Robot Button C pressed!")
-            # Add your functionality here
+            print("🔌 Shutdown button pressed - initiating graceful system shutdown...")
+            
+            # Update screen with shutdown message if available
+            if self.__screen:
+                self.__screen.update_status("SHUTTING DOWN...")
+                self.__screen.refresh_and_update_display(self.__controller_connected)
+            
+            # Stop the control loop first
+            self.__running = False
+            
+            # Perform cleanup operations
+            try:
+                self.cleanup()
+                print("✅ Cleanup completed - shutting down system...")
+            except Exception as e:
+                print(f"⚠️  Warning during cleanup: {e}")
+            
+            # Initiate system shutdown
+            try:
+                import subprocess
+                print("🔌 Executing system shutdown...")
+                subprocess.run(['sudo', 'shutdown', '-h', 'now'], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"❌ Failed to execute shutdown command: {e}")
+                print("   Try running: sudo shutdown -h now")
+            except Exception as e:
+                print(f"❌ Shutdown error: {e}")
+                # Fallback to alternative shutdown method
+                try:
+                    import os
+                    os.system('sudo shutdown -h now')
+                except Exception as e2:
+                    print(f"❌ Fallback shutdown failed: {e2}")
+                    print("   Manual shutdown required")
             
         elif self.__robot_button.press_d():   # D button is on the upper right side of the screen
             print("Robot Button D pressed!")
@@ -983,22 +1016,22 @@ class BluetoothController_Rider(object):
                     pygame.event.pump()
                     
                     # Process button events specifically 
-                    for event in pygame.event.get():  # type: ignore
-                        if event.type == pygame.QUIT:  # type: ignore
+                    for event in pygame.event.get():
+                        if event.type == pygame.QUIT:
                             self.__running = False
                             break
                         
-                        elif event.type == pygame.JOYBUTTONDOWN:  # type: ignore
+                        elif event.type == pygame.JOYBUTTONDOWN:
                             self.__process_buttons(event.button, True)
                             # Mark activity
                             self.__last_controller_activity = current_time
                         
-                        elif event.type == pygame.JOYBUTTONUP:  # type: ignore
+                        elif event.type == pygame.JOYBUTTONUP:
                             self.__process_buttons(event.button, False)
                             # Mark activity
                             self.__last_controller_activity = current_time
                         
-                        elif event.type == pygame.JOYHATMOTION:  # type: ignore
+                        elif event.type == pygame.JOYHATMOTION:
                             self.__process_dpad(event.value[0], event.value[1])
                             # Mark activity
                             self.__last_controller_activity = current_time
@@ -1062,7 +1095,7 @@ class BluetoothController_Rider(object):
                         # Process movement
                         self.__process_movement(left_stick_x, left_stick_y, right_stick_x, right_stick_y)
                         
-                    except pygame.error:  # type: ignore
+                    except pygame.error:
                         print("🔴 Controller hardware disconnected!")
                         self.__controller_connected = False
                         
@@ -1244,7 +1277,7 @@ class BluetoothController_Rider(object):
         
         if self.__controller_connected:
             self.__controller.quit()
-        pygame.quit()  # type: ignore
+        pygame.quit()
 
     def print_button_mapping(self):
         """Print current button mapping for reference"""

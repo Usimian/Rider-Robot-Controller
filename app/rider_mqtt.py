@@ -3,6 +3,7 @@
 
 # Rider Robot MQTT Communication Module
 # Handles bidirectional MQTT communication for remote control and monitoring
+# Enhanced with robust disconnect handling and safety features
 # Marc Wester
 
 import json
@@ -26,6 +27,20 @@ class RiderMQTT:
         self.__client = None
         self.__connected = False
         self.__running = False
+        
+        # Connection monitoring
+        self.__connection_timeout = 30.0  # 30 seconds timeout for client inactivity
+        self.__last_client_activity = time.time()
+        self.__client_heartbeat_topic = 'rider/client/heartbeat'
+        self.__inactive_client_safety_triggered = False
+        
+        # Safety shutdown tracking
+        self.__safety_shutdown_in_progress = False
+        self.__safety_commands_timeout = 3.0  # Wait 3 seconds for safety commands
+        
+        # Message tracking for corruption prevention
+        self.__last_movement_command = {'x': 0, 'y': 0, 'timestamp': 0}
+        self.__movement_command_timeout = 2.0  # Stop movement if no commands for 2 seconds
         
         # Publishing intervals (seconds)
         self.__status_interval = 2.0  # Status updates every 2 seconds
@@ -51,7 +66,9 @@ class RiderMQTT:
             'height': 85,
             'connection_status': 'disconnected',
             'cpu_percent': 0.0,
-            'cpu_load_1min': 0.0
+            'cpu_load_1min': 0.0,
+            'client_connected': False,
+            'last_client_seen': 0
         }
         
         # Battery reading state
@@ -73,14 +90,21 @@ class RiderMQTT:
             'control_settings': 'rider/control/settings',
             'control_camera': 'rider/control/camera',
             'control_system': 'rider/control/system',
-            'request_battery': 'rider/request/battery'
+            'request_battery': 'rider/request/battery',
+            'client_heartbeat': 'rider/client/heartbeat',
+            'client_disconnect': 'rider/client/disconnect',
+            'server_status': 'rider/server/status'
         }
         
         # Publishing thread
         self.__publish_thread = None
         
+        # Connection monitoring thread
+        self.__monitor_thread = None
+        
         if self.__debug:
             print(f"RiderMQTT initialized - Broker: {broker_host}:{broker_port}")
+            print(f"🛡️ Enhanced with robust disconnect handling and safety features")
     
     def set_command_callback(self, command_type: str, callback: Callable):
         """Set callback function for specific command types"""
@@ -115,8 +139,9 @@ class RiderMQTT:
             if self.__connected:
                 self.__running = True
                 self.__start_publishing_thread()
+                self.__start_connection_monitor()
                 if self.__debug:
-                    print("✅ MQTT connected successfully")
+                    print("✅ MQTT connected successfully with enhanced robustness")
                 return True
             else:
                 if self.__debug:
@@ -128,10 +153,77 @@ class RiderMQTT:
                 print(f"❌ MQTT connection failed: {e}")
             return False
     
+    def graceful_disconnect(self):
+        """Gracefully disconnect with safety shutdown commands"""
+        if self.__debug:
+            print("📡 Graceful MQTT disconnect initiated...")
+        
+        self.__safety_shutdown_in_progress = True
+        
+        try:
+            # Send safety shutdown commands
+            self.__send_safety_shutdown_commands()
+            
+            # Wait briefly for message delivery
+            time.sleep(0.5)
+            
+            # Properly disconnect
+            self.disconnect()
+            
+            if self.__debug:
+                print("✅ Graceful MQTT disconnect completed")
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️ Error during graceful disconnect: {e}")
+            # Fallback to force disconnect
+            self.disconnect()
+    
+    def __send_safety_shutdown_commands(self):
+        """Send safety shutdown commands to ensure robot safety"""
+        if not self.__robot or not self.__connected:
+            return
+            
+        try:
+            if self.__debug:
+                print("🛡️ Sending safety shutdown commands...")
+            
+            # Emergency stop command
+            self.__robot.rider_move_x(0)
+            self.__robot.rider_turn(0)
+            try:
+                self.__robot.rider_move_y(0)
+            except:
+                pass
+            
+            # Publish emergency stop event
+            if self.__client and self.__connected:
+                emergency_data = {
+                    'timestamp': time.time(),
+                    'source': 'disconnect_safety',
+                    'reason': 'graceful_disconnect'
+                }
+                self.publish_event('emergency_stop', emergency_data)
+                
+                # Update robot state to stopped
+                self.__robot_state['connection_status'] = 'disconnecting'
+                self.__publish_status()
+            
+            if self.__debug:
+                print("[CLEANUP] Emergency stop sent during disconnect")
+                print("[CLEANUP] Movement stop sent during disconnect")
+        except Exception as e:
+            if self.__debug:
+                print(f"⚠️ Error sending safety shutdown commands: {e}")
+    
     def disconnect(self):
         """Disconnect from MQTT broker"""
         self.__running = False
         
+        # Stop monitoring thread
+        if self.__monitor_thread and self.__monitor_thread.is_alive():
+            self.__monitor_thread.join(timeout=2)
+        
+        # Stop publishing thread
         if self.__publish_thread and self.__publish_thread.is_alive():
             self.__publish_thread.join(timeout=2)
         
@@ -142,6 +234,103 @@ class RiderMQTT:
         
         if self.__debug:
             print("MQTT disconnected")
+    
+    def __start_connection_monitor(self):
+        """Start connection monitoring thread"""
+        self.__monitor_thread = threading.Thread(target=self.__connection_monitoring_loop, daemon=True)
+        self.__monitor_thread.start()
+        if self.__debug:
+            print("🔍 MQTT connection monitoring started")
+    
+    def __connection_monitoring_loop(self):
+        """Monitor client connections and trigger safety actions if needed"""
+        while self.__running and self.__connected:
+            try:
+                current_time = time.time()
+                
+                # Check for client inactivity
+                time_since_activity = current_time - self.__last_client_activity
+                
+                if time_since_activity > self.__connection_timeout:
+                    if not self.__inactive_client_safety_triggered:
+                        if self.__debug:
+                            print(f"⚠️ Client inactive for {time_since_activity:.1f}s - triggering safety stop")
+                        
+                        self.__trigger_safety_stop_for_inactive_client()
+                        self.__inactive_client_safety_triggered = True
+                        
+                        # Update robot state
+                        self.__robot_state['client_connected'] = False
+                        self.__robot_state['connection_status'] = 'client_timeout'
+                else:
+                    # Reset safety trigger if client becomes active again
+                    if self.__inactive_client_safety_triggered:
+                        if self.__debug:
+                            print("✅ Client activity resumed - resetting safety state")
+                        self.__inactive_client_safety_triggered = False
+                        self.__robot_state['client_connected'] = True
+                        self.__robot_state['connection_status'] = 'connected'
+                
+                # Check for stale movement commands
+                movement_age = current_time - self.__last_movement_command['timestamp']
+                if movement_age > self.__movement_command_timeout:
+                    if (self.__last_movement_command['x'] != 0 or 
+                        self.__last_movement_command['y'] != 0):
+                        if self.__debug:
+                            print(f"⚠️ Movement command timeout ({movement_age:.1f}s) - stopping robot")
+                        self.__stop_robot_movement()
+                        self.__last_movement_command = {'x': 0, 'y': 0, 'timestamp': current_time}
+                
+                time.sleep(1.0)  # Check every second
+                
+            except Exception as e:
+                if self.__debug:
+                    print(f"Error in connection monitoring: {e}")
+                time.sleep(5.0)
+    
+    def __trigger_safety_stop_for_inactive_client(self):
+        """Trigger safety stop when client becomes inactive"""
+        if not self.__robot:
+            return
+            
+        try:
+            # Stop all movement immediately
+            self.__robot.rider_move_x(0)
+            self.__robot.rider_turn(0)
+            try:
+                self.__robot.rider_move_y(0)
+            except:
+                pass
+            
+            # Publish safety event
+            if self.__client and self.__connected:
+                safety_data = {
+                    'timestamp': time.time(),
+                    'source': 'connection_monitor',
+                    'reason': 'client_timeout',
+                    'timeout_duration': time.time() - self.__last_client_activity
+                }
+                self.publish_event('safety_stop', safety_data)
+            
+        except Exception as e:
+            if self.__debug:
+                print(f"Error during safety stop: {e}")
+    
+    def __stop_robot_movement(self):
+        """Stop robot movement (internal method)"""
+        if not self.__robot:
+            return
+            
+        try:
+            self.__robot.rider_move_x(0)
+            self.__robot.rider_turn(0)
+            try:
+                self.__robot.rider_move_y(0)
+            except:
+                pass
+        except Exception as e:
+            if self.__debug:
+                print(f"Error stopping robot movement: {e}")
     
     def __on_connect(self, client, userdata, flags, reason_code, properties):
         """Callback for MQTT connection"""
@@ -156,13 +345,21 @@ class RiderMQTT:
                 self.__topics['control_settings'],
                 self.__topics['control_camera'],
                 self.__topics['control_system'],
-                self.__topics['request_battery']
+                self.__topics['request_battery'],
+                self.__topics['client_heartbeat'],
+                self.__topics['client_disconnect']
             ]
             
             for topic in control_topics:
                 client.subscribe(topic)
                 if self.__debug:
                     print(f"Subscribed to: {topic}")
+            
+            # Reset client activity tracking
+            self.__last_client_activity = time.time()
+            self.__inactive_client_safety_triggered = False
+            self.__robot_state['client_connected'] = True
+            self.__robot_state['connection_status'] = 'connected'
         else:
             if self.__debug:
                 print(f"MQTT 5.0 connection failed with reason code: {reason_code}")
@@ -172,40 +369,105 @@ class RiderMQTT:
         self.__connected = False
         if self.__debug:
             print(f"MQTT 5.0 broker disconnected with reason code: {reason_code}")
+        
+        # Trigger safety stop on unexpected disconnection
+        if not self.__safety_shutdown_in_progress:
+            if self.__debug:
+                print("🛑 Unexpected MQTT disconnection - triggering safety stop")
+            self.__stop_robot_movement()
     
     def __on_message(self, client, userdata, msg):
-        """Handle incoming MQTT messages"""
+        """Handle incoming MQTT messages with enhanced error handling"""
         try:
             topic = msg.topic
             payload = json.loads(msg.payload.decode())
             
+            # Update client activity time for any message
+            self.__last_client_activity = time.time()
+            self.__robot_state['last_client_seen'] = self.__last_client_activity
+            
             if self.__debug:
                 print(f"MQTT message received - Topic: {topic}, Payload: {payload}")
             
-            # Route message to appropriate handler
-            if topic == self.__topics['control_movement']:
-                self.__handle_movement_command(payload)
-            elif topic == self.__topics['control_settings']:
-                self.__handle_settings_command(payload)
-            elif topic == self.__topics['control_camera']:
-                self.__handle_camera_command(payload)
-            elif topic == self.__topics['control_system']:
-                self.__handle_system_command(payload)
-            elif topic == self.__topics['request_battery']:
-                self.__handle_battery_request(payload)
+            # Route message to appropriate handler with error recovery
+            try:
+                if topic == self.__topics['control_movement']:
+                    self.__handle_movement_command(payload)
+                elif topic == self.__topics['control_settings']:
+                    self.__handle_settings_command(payload)
+                elif topic == self.__topics['control_camera']:
+                    self.__handle_camera_command(payload)
+                elif topic == self.__topics['control_system']:
+                    self.__handle_system_command(payload)
+                elif topic == self.__topics['request_battery']:
+                    self.__handle_battery_request(payload)
+                elif topic == self.__topics['client_heartbeat']:
+                    self.__handle_client_heartbeat(payload)
+                elif topic == self.__topics['client_disconnect']:
+                    self.__handle_client_disconnect(payload)
+            except Exception as handler_error:
+                if self.__debug:
+                    print(f"⚠️ Error in message handler for {topic}: {handler_error}")
+                # Continue processing other messages even if one fails
                 
+        except json.JSONDecodeError as e:
+            if self.__debug:
+                print(f"⚠️ Invalid JSON in MQTT message: {e}")
+                print(f"   Raw payload: {msg.payload}")
         except Exception as e:
             if self.__debug:
-                print(f"Error processing MQTT message: {e}")
+                print(f"⚠️ Error processing MQTT message: {e}")
+    
+    def __handle_client_heartbeat(self, payload: Dict[str, Any]):
+        """Handle client heartbeat messages"""
+        if self.__debug:
+            print("💓 Client heartbeat received")
+        
+        # Update activity time (already done in __on_message)
+        # Additional heartbeat-specific processing can be added here
+        pass
+    
+    def __handle_client_disconnect(self, payload: Dict[str, Any]):
+        """Handle explicit client disconnect messages"""
+        source = payload.get('source', 'unknown')
+        reason = payload.get('reason', 'client_disconnect')
+        
+        if self.__debug:
+            print(f"📤 Client disconnect message received - Source: {source}, Reason: {reason}")
+        
+        # Trigger immediate safety stop
+        self.__stop_robot_movement()
+        
+        # Update connection status
+        self.__robot_state['client_connected'] = False
+        self.__robot_state['connection_status'] = 'client_disconnected'
+        
+        # Publish disconnect acknowledgment
+        disconnect_ack = {
+            'timestamp': time.time(),
+            'acknowledged': True,
+            'source': source,
+            'reason': reason
+        }
+        self.publish_event('client_disconnect_ack', disconnect_ack)
     
     def __handle_movement_command(self, payload: Dict[str, Any]):
-        """Handle movement control commands"""
+        """Handle movement control commands with enhanced safety tracking"""
         x = payload.get('x', 0)  # -100 to +100 (left/right)
         y = payload.get('y', 0)  # -100 to +100 (backward/forward)
         timestamp = payload.get('timestamp', time.time())
+        source = payload.get('source', 'client')
+        
+        # Update movement command tracking for timeout monitoring
+        self.__last_movement_command = {
+            'x': x,
+            'y': y,
+            'timestamp': timestamp,
+            'source': source
+        }
         
         if self.__debug:
-            print(f"🎮 Movement command: x={x}, y={y}, timestamp={timestamp}")
+            print(f"🎮 Movement command: x={x}, y={y}, timestamp={timestamp}, source={source}")
         
         # Convert x,y values (-100 to +100) to robot movement commands
         if self.__robot:
@@ -239,6 +501,11 @@ class RiderMQTT:
             except Exception as e:
                 if self.__debug:
                     print(f"❌ Error executing movement command: {e}")
+                # On movement command error, ensure robot is stopped
+                try:
+                    self.__stop_robot_movement()
+                except:
+                    pass
         
         # Trigger callback if set
         if 'movement' in self.__command_callbacks:
@@ -654,7 +921,12 @@ class RiderMQTT:
         return self.__robot_state.copy()
     
     def cleanup(self):
-        """Clean up MQTT resources"""
+        """Clean up MQTT resources with graceful disconnect"""
         if self.__debug:
             print("Cleaning up MQTT resources...")
-        self.disconnect() 
+        
+        # Use graceful disconnect if connected, otherwise force disconnect
+        if self.__connected:
+            self.graceful_disconnect()
+        else:
+            self.disconnect() 
