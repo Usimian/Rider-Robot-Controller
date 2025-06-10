@@ -43,18 +43,16 @@ class RiderMQTT:
         self.__movement_command_timeout = 2.0  # Stop movement if no commands for 2 seconds
         
         # Publishing intervals (seconds)
-        self.__status_interval = 2.0  # Status updates every 2 seconds
+        self.__status_interval = 2.0  # Status updates every 2 seconds (includes battery)
         self.__imu_interval = 0.5     # IMU data every 500ms
-        self.__battery_interval = 10.0  # Battery every 10 seconds
         
         # Last publish times
         self.__last_status_publish = 0
         self.__last_imu_publish = 0
-        self.__last_battery_publish = 0
         
         # Current robot state
         self.__robot_state = {
-            'battery_level': None,  # Will be read from hardware on first read
+            'battery_level': None,  # Battery percentage (0-100%) - Will be read from hardware on first read
             'speed_scale': 1.0,
             'roll_balance_enabled': False,
             'performance_mode_enabled': False,
@@ -82,7 +80,6 @@ class RiderMQTT:
         # Topic structure
         self.__topics = {
             'status': 'rider/status',
-            'battery': 'rider/status/battery',
             'imu': 'rider/status/imu',
             'camera': 'rider/status/camera',
             'connection': 'rider/status/connection',
@@ -90,7 +87,6 @@ class RiderMQTT:
             'control_settings': 'rider/control/settings',
             'control_camera': 'rider/control/camera',
             'control_system': 'rider/control/system',
-            'request_battery': 'rider/request/battery',
             'client_heartbeat': 'rider/client/heartbeat',
             'client_disconnect': 'rider/client/disconnect',
             'server_status': 'rider/server/status'
@@ -345,7 +341,6 @@ class RiderMQTT:
                 self.__topics['control_settings'],
                 self.__topics['control_camera'],
                 self.__topics['control_system'],
-                self.__topics['request_battery'],
                 self.__topics['client_heartbeat'],
                 self.__topics['client_disconnect']
             ]
@@ -399,8 +394,6 @@ class RiderMQTT:
                     self.__handle_camera_command(payload)
                 elif topic == self.__topics['control_system']:
                     self.__handle_system_command(payload)
-                elif topic == self.__topics['request_battery']:
-                    self.__handle_battery_request(payload)
                 elif topic == self.__topics['client_heartbeat']:
                     self.__handle_client_heartbeat(payload)
                 elif topic == self.__topics['client_disconnect']:
@@ -606,22 +599,109 @@ class RiderMQTT:
                 if self.__debug:
                     print(f"❌ Error executing emergency stop: {e}")
         
+        elif self.__robot and action == 'reset_robot':
+            try:
+                if self.__debug:
+                    print("   🔄 RESET ROBOT - Resetting to default state")
+                
+                # Reset robot to default state
+                self.__robot.rider_reset()
+                
+                # Update robot state to default values
+                self.__robot_state['speed_scale'] = 1.0
+                self.__robot_state['roll_balance_enabled'] = False
+                self.__robot_state['performance_mode_enabled'] = False
+                self.__robot_state['height'] = 85
+                
+                # Publish updated status after reset
+                self.__publish_status()
+                
+                if self.__debug:
+                    print("   ✅ Robot reset completed")
+                
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ Error executing robot reset: {e}")
+        
+        elif action == 'reboot_pi':
+            try:
+                if self.__debug:
+                    print("   🔄 REBOOT PI - Initiating system reboot")
+                
+                # Send safety shutdown commands first
+                if self.__robot:
+                    self.__robot.rider_move_x(0)
+                    self.__robot.rider_turn(0)
+                    try:
+                        self.__robot.rider_move_y(0)
+                    except:
+                        pass
+                
+                # Publish status before reboot
+                reboot_status = {
+                    'timestamp': time.time(),
+                    'status': 'rebooting',
+                    'message': 'System reboot initiated via MQTT'
+                }
+                self.__publish_json(self.__topics['server_status'], reboot_status)
+                
+                # Wait briefly for message delivery
+                time.sleep(0.5)
+                
+                # Execute reboot command
+                import subprocess
+                if self.__debug:
+                    print("   🔄 Executing system reboot...")
+                subprocess.run(['sudo', 'reboot'], check=True)
+                
+            except subprocess.CalledProcessError as e:
+                if self.__debug:
+                    print(f"❌ Failed to execute reboot command: {e}")
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ Error executing reboot: {e}")
+        
+        elif action == 'poweroff_pi':
+            try:
+                if self.__debug:
+                    print("   🔌 POWEROFF PI - Initiating system shutdown")
+                
+                # Send safety shutdown commands first
+                if self.__robot:
+                    self.__robot.rider_move_x(0)
+                    self.__robot.rider_turn(0)
+                    try:
+                        self.__robot.rider_move_y(0)
+                    except:
+                        pass
+                
+                # Publish status before shutdown
+                shutdown_status = {
+                    'timestamp': time.time(),
+                    'status': 'shutting_down',
+                    'message': 'System shutdown initiated via MQTT'
+                }
+                self.__publish_json(self.__topics['server_status'], shutdown_status)
+                
+                # Wait briefly for message delivery
+                time.sleep(0.5)
+                
+                # Execute shutdown command
+                import subprocess
+                if self.__debug:
+                    print("   🔌 Executing system shutdown...")
+                subprocess.run(['sudo', 'shutdown', '-h', 'now'], check=True)
+                
+            except subprocess.CalledProcessError as e:
+                if self.__debug:
+                    print(f"❌ Failed to execute shutdown command: {e}")
+            except Exception as e:
+                if self.__debug:
+                    print(f"❌ Error executing shutdown: {e}")
+        
         # Trigger callback if set
         if 'system' in self.__command_callbacks:
             self.__command_callbacks['system'](payload)
-    
-    def __handle_battery_request(self, payload: Dict[str, Any]):
-        """Handle battery level request"""
-        if self.__debug:
-            print(f"Battery request received: {payload}")
-        
-        # Immediately publish current battery level
-        self.__publish_battery()
-        
-        # Also trigger callback if set
-        if 'battery_request' in self.__command_callbacks:
-            self.__command_callbacks['battery_request'](payload)
-    
     def update_robot_state(self, **kwargs):
         """Update robot state for publishing"""
         for key, value in kwargs.items():
@@ -653,11 +733,6 @@ class RiderMQTT:
                     self.__publish_imu_data()
                     self.__last_imu_publish = current_time
                 
-                # Publish battery data
-                if current_time - self.__last_battery_publish >= self.__battery_interval:
-                    self.__publish_battery()
-                    self.__last_battery_publish = current_time
-                
                 time.sleep(0.1)  # Small sleep to prevent excessive CPU usage
                 
             except Exception as e:
@@ -666,12 +741,15 @@ class RiderMQTT:
                 time.sleep(1)
     
     def __publish_status(self):
-        """Publish general status information"""
+        """Publish general status information including battery"""
         if not self.__connected:
             return
         
         # Update CPU data before publishing
         self.__get_cpu_data()
+        
+        # Update battery data before publishing
+        self.__update_battery_data()
         
         status_data = {
             'timestamp': time.time(),
@@ -683,7 +761,8 @@ class RiderMQTT:
             'height': self.__robot_state['height'],
             'connection_status': self.__robot_state['connection_status'],
             'cpu_percent': self.__robot_state['cpu_percent'],
-            'cpu_load_1min': self.__robot_state['cpu_load_1min']
+            'cpu_load_1min': self.__robot_state['cpu_load_1min'],
+            'battery_level': self.__robot_state['battery_level']  # Battery percentage (0-100%)
         }
         
         self.__publish_json(self.__topics['status'], status_data)
@@ -745,11 +824,8 @@ class RiderMQTT:
                 print(f"⚠️  MQTT: Error reading IMU data: {e}")
             return None
     
-    def __publish_battery(self):
-        """Publish battery information"""
-        if not self.__connected:
-            return
-        
+    def __update_battery_data(self):
+        """Update battery data in robot state"""
         # Try to get real battery reading from robot if available
         real_battery_level = self.__get_real_battery_level()
         
@@ -757,9 +833,10 @@ class RiderMQTT:
         if real_battery_level is not None:
             # Successfully read battery - reset failure counter
             self.__battery_read_failures = 0
-            self.__last_known_battery = real_battery_level
-            self.__robot_state['battery_level'] = real_battery_level
-            source = 'hardware'
+            self.__last_known_battery = real_battery_level  # Store battery percentage (0-100%)
+            self.__robot_state['battery_level'] = real_battery_level  # Battery percentage (0-100%)
+            if self.__debug:
+                print(f"✅ Battery reading successful: {real_battery_level}%")
         else:
             # Failed to read battery
             self.__battery_read_failures += 1
@@ -767,14 +844,12 @@ class RiderMQTT:
             if self.__battery_read_failures <= self.__max_battery_failures:
                 # Use last known good value for a few failures
                 if self.__robot_state['battery_level'] is None:
-                    self.__robot_state['battery_level'] = self.__last_known_battery
-                source = 'cached'
+                    self.__robot_state['battery_level'] = self.__last_known_battery  # Use cached battery percentage (0-100%)
                 if self.__debug:
                     print(f"⚠️  Battery read failed ({self.__battery_read_failures}/{self.__max_battery_failures}), using cached value: {self.__robot_state['battery_level']}%")
             else:
                 # Too many failures, use last known good value
-                self.__robot_state['battery_level'] = self.__last_known_battery
-                source = 'fallback'
+                self.__robot_state['battery_level'] = self.__last_known_battery  # Use fallback battery percentage (0-100%)
                 if self.__debug:
                     print(f"⚠️  Battery reading consistently failing, using fallback value: {self.__robot_state['battery_level']}%")
         
@@ -783,21 +858,12 @@ class RiderMQTT:
         if battery_level is None:
             battery_level = self.__last_known_battery
         
-        # Clamp battery level to valid range
+        # Clamp battery level to valid percentage range (0-100%)
         battery_level = max(0, min(100, battery_level))
-        self.__robot_state['battery_level'] = battery_level
-        
-        battery_data = {
-            'timestamp': time.time(),
-            'level': battery_level,
-            'status': 'normal' if battery_level > 20 else 'low',
-            'source': source
-        }
-        
-        self.__publish_json(self.__topics['battery'], battery_data)
+        self.__robot_state['battery_level'] = battery_level  # Store final battery percentage (0-100%)
     
     def __get_real_battery_level(self) -> Optional[int]:
-        """Try to get real battery level from robot hardware"""
+        """Try to get real battery level from robot hardware (returns percentage 0-100%)"""
         if not self.__robot:
             return None
             
@@ -879,8 +945,9 @@ class RiderMQTT:
             json_payload = json.dumps(data)
             self.__client.publish(topic, json_payload)
             
-            if self.__debug and topic == self.__topics['battery']:
-                print(f"Published to {topic}: {data}")
+            # Debug output for specific topics (removed battery topic reference)
+            if self.__debug and topic == self.__topics['status']:
+                print(f"📡 Published status to {topic}: battery={data.get('battery_level', 'N/A')}%")
                 
         except Exception as e:
             if self.__debug:

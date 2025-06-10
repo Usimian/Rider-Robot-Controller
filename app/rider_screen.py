@@ -468,44 +468,8 @@ class RiderScreen:
         """Refresh data from the robot if available"""
         if self.__robot is not None:
             try:
-                # Try to read battery level using consolidated method
-                battery_level = None
-                
-                # Read battery with retry logic
-                battery_level = None
-                
-                # Try rider-specific method first
-                if hasattr(self.__robot, 'rider_read_battery'):
-                    battery_level = self.__read_sensor_with_retry('battery', self.__robot.rider_read_battery)
-                elif hasattr(self.__robot, 'read_battery'):
-                    battery_level = self.__read_sensor_with_retry('battery', self.__robot.read_battery)
-                
-                # Handle battery reading with better error recovery
-                if battery_level is not None and battery_level > 0:
-                    # Successful battery reading
-                    self.__battery_read_failures = 0
-                    self.__last_good_battery = int(battery_level)
-                    self.update_battery(battery_level)
-                    
-                    if self.__debug:
-                        print(f"✅ Battery reading successful: {battery_level}%")
-                else:
-                    # Failed battery reading
-                    self.__battery_read_failures += 1
-                    self.__consecutive_successful_reads = 0
-                    
-                    if self.__battery_read_failures <= self.__max_battery_failures:
-                        # Use last good battery value for a few failures
-                        self.update_battery(self.__last_good_battery)
-                        
-                        if self.__debug:
-                            print(f"⚠️  Battery read failed ({self.__battery_read_failures}/{self.__max_battery_failures}), using cached value: {self.__last_good_battery}%")
-                    else:
-                        # Too many failures - show 0
-                        self.update_battery(0)
-                        
-                        if self.__debug:
-                            print(f"❌ Battery consistently failing ({self.__battery_read_failures} failures), showing 0%")
+                # Battery reading is now handled by MQTT status updates only
+                # Only read IMU/odometry and CPU data here
                 
                 # Read odometry data
                 self.__read_odometry_data()
@@ -516,7 +480,6 @@ class RiderScreen:
             except Exception as e:
                 if self.__debug:
                     print(f"Error reading from robot: {e}")
-                self.update_battery(0)
     
     def set_external_controller_status(self, connected):
         """Set controller status from external source (overrides internal detection)"""

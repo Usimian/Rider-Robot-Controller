@@ -108,16 +108,14 @@ class BluetoothController_Rider(object):
             self.__screen = RiderScreen(robot=self.__robot, debug=self.__debug)
             
             # Set initial screen status based on controller connection
+            self.__screen.update_speed(self.__speed_scale)
+            self.__screen.update_roll_balance(self.__roll_balance_enabled)
+            self.__screen.update_performance_mode(self.__performance_mode_enabled)
+            
             if self.__controller_connected:
-                self.__screen.update_speed(self.__speed_scale)
-                self.__screen.update_roll_balance(self.__roll_balance_enabled)
-                self.__screen.update_performance_mode(self.__performance_mode_enabled)
                 # Force initial display update with main controller status
                 self.__screen.refresh_and_update_display(self.__controller_connected)
             else:
-                self.__screen.update_speed(self.__speed_scale)
-                self.__screen.update_roll_balance(self.__roll_balance_enabled)
-                self.__screen.update_performance_mode(self.__performance_mode_enabled)
                 # Force initial display update showing no controller
                 self.__screen.set_external_controller_status(False)
                 self.__screen.refresh_and_update_display(False)
@@ -137,15 +135,23 @@ class BluetoothController_Rider(object):
         # Initialize MQTT communication system
         self.__setup_mqtt()
         
-        # Read and display battery voltage if robot is connected (after screen is initialized)
-        if self.__robot is not None:
-            self.__check_battery_voltage()
-            
-            # Initialize MQTT with current battery level if available
-            if self.__mqtt_client:
-                current_battery = self.__read_battery_level()
-                if current_battery is not None:
-                    self.__mqtt_client.update_robot_state(battery_level=current_battery)
+        # Initialize battery display on screen after MQTT is ready
+        if self.__screen and self.__mqtt_client:
+            try:
+                # Give MQTT a moment to get initial battery reading
+                time.sleep(0.5)
+                robot_state = self.__mqtt_client.get_robot_state()
+                initial_battery = robot_state.get('battery_level', 0) or 0
+                if initial_battery > 0:
+                    self.__screen.update_battery(initial_battery)
+                    if self.__debug:
+                        print(f"✅ Initial battery level set on screen: {initial_battery}%")
+            except Exception as e:
+                if self.__debug:
+                    print(f"⚠️  Could not set initial battery on screen: {e}")
+        
+        # Battery reading is now handled by MQTT status updates only
+        print("✅ Battery monitoring will be handled via MQTT status updates")
     
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
@@ -524,100 +530,9 @@ class BluetoothController_Rider(object):
         if self.__debug:
             print("Robot reset to default state - Roll balance and performance mode disabled")
     
-    def __read_battery_level(self):
-        """Unified method to read battery level with fallback options"""
-        try:
-            # First try the rider-specific method
-            try:
-                battery_level = self.__robot.rider_read_battery()
-                if self.__debug:
-                    print(f"📊 Battery Level (rider method): {battery_level}%")
-                return battery_level
-            except AttributeError:
-                # Fallback to standard method
-                try:
-                    battery_level = self.__robot.read_battery()
-                    if self.__debug:
-                        print(f"📊 Battery Level (standard method): {battery_level}%")
-                    return battery_level
-                except AttributeError:
-                    if self.__debug:
-                        print("⚠️  Battery reading method not available")
-                    return None
-            except Exception as e:
-                if self.__debug:
-                    print(f"⚠️  Error reading battery with rider method: {e}")
-                # Try standard method as fallback
-                try:
-                    battery_level = self.__robot.read_battery()
-                    if self.__debug:
-                        print(f"📊 Battery Level (fallback method): {battery_level}%")
-                    return battery_level
-                except Exception as e2:
-                    if self.__debug:
-                        print(f"❌ Failed to read battery: {e2}")
-                    return None
-        except Exception as e:
-            if self.__debug:
-                print(f"❌ Battery reading failed: {e}")
-            return None
+    # Battery reading is now consolidated in MQTT status updates only
     
-    def __display_battery_status(self, battery_level, detailed=True):
-        """Display battery status with appropriate warnings"""
-        try:
-            level = int(battery_level)
-            
-            if level <= 0:
-                message = "❌ WARNING: Battery reading failed or robot not responding"
-                print(message)
-                if detailed:
-                    print("   • Check robot connection")
-                
-            elif level < 20:
-                message = f"🚨 CRITICAL: Battery very low! ({level}%)"
-                print(message)
-                if detailed:
-                    print(f"   • Current level: {level}%")
-                
-            elif level < 40:
-                message = f"⚠️  WARNING: Battery low ({level}%)"
-                print(message)
-                if detailed:
-                    print(f"   • Current level: {level}%")
-                
-            elif level < 70:
-                message = f"📱 GOOD: Battery level adequate ({level}%)"
-                print(message)
-                if detailed:
-                    print(f"   • Current level: {level}%")
-                
-            else:
-                message = f"✅ EXCELLENT: Battery level good! ({level}%)"
-                print(message)
-                if detailed:
-                    print(f"   • Current level: {level}%")
-                
-            # Additional voltage estimate (only for detailed display)
-            if detailed:
-                # Typical Li-ion: 3.0V (empty) to 4.2V (full) per cell
-                # Assuming 2S configuration: 6.0V - 8.4V range
-                estimated_voltage = 6.0 + (level / 100.0) * 2.4
-                print(f"   • Estimated voltage: ~{estimated_voltage:.1f}V")
-                
-        except (ValueError, TypeError):
-            print(f"⚠️  Invalid battery reading: {battery_level}")
-    
-    def __check_battery_voltage(self):
-        """Read and display battery voltage at startup"""
-        battery_level = self.__read_battery_level()
-        
-        if battery_level is not None:
-            self.__display_battery_status(battery_level, detailed=True)
-            # Update screen with battery level if available
-            if self.__screen:
-                self.__screen.update_battery(battery_level)
-        else:
-            print("❌ Could not read battery level")
+    # Battery display is now handled by MQTT status updates only
     
     def __update_mqtt_state(self):
         """Update MQTT with current robot state"""
@@ -625,10 +540,12 @@ class BluetoothController_Rider(object):
             return
             
         try:
-            # Get current battery level
-            current_battery = self.__read_battery_level()
-            if current_battery is None:
-                current_battery = 0
+            # Battery level is now handled in MQTT status updates
+            # Get from MQTT state if available, otherwise use placeholder
+            current_battery = 0  # Battery percentage (0-100%)
+            if self.__mqtt_client:
+                robot_state = self.__mqtt_client.get_robot_state()
+                current_battery = robot_state.get('battery_level', 0) or 0  # Battery percentage (0-100%)
             
             # Update MQTT with current robot state
             self.__mqtt_client.update_robot_state(
@@ -1118,10 +1035,12 @@ class BluetoothController_Rider(object):
                 # Update LCD screen periodically
                 if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
                     try:
-                        # Update battery level on screen periodically
-                        current_battery = self.__read_battery_level()
-                        if current_battery is not None:
-                            self.__screen.update_battery(current_battery)
+                        # Update battery level from MQTT status before refreshing screen
+                        if self.__mqtt_client:
+                            robot_state = self.__mqtt_client.get_robot_state()
+                            current_battery = robot_state.get('battery_level', 0) or 0
+                            if current_battery > 0:
+                                self.__screen.update_battery(current_battery)
                         
                         # Pass controller status from main controller to screen
                         self.__screen.refresh_and_update_display(self.__controller_connected)
@@ -1201,6 +1120,13 @@ class BluetoothController_Rider(object):
                 # Update screen status
                 if self.__screen:
                     try:
+                        # Update battery level from MQTT even while waiting
+                        if self.__mqtt_client:
+                            robot_state = self.__mqtt_client.get_robot_state()
+                            current_battery = robot_state.get('battery_level', 0) or 0
+                            if current_battery > 0:
+                                self.__screen.update_battery(current_battery)
+                        
                         # Pass disconnected status to screen during waiting
                         self.__screen.refresh_and_update_display(False)
                     except Exception as e:
@@ -1293,23 +1219,29 @@ class BluetoothController_Rider(object):
         print("="*60)
 
     def __quick_battery_check(self):
-        """Quick battery check for button press"""
-        battery_level = self.__read_battery_level()
-        
-        if battery_level is not None:
-            self.__display_battery_status(battery_level, detailed=False)
+        """Quick battery check for button press - now via MQTT"""
+        if self.__mqtt_client:
+            robot_state = self.__mqtt_client.get_robot_state()
+            battery_level = robot_state.get('battery_level', 0)  # Battery percentage (0-100%)
+            if battery_level and battery_level > 0:
+                print(f"📱 Battery Level: {battery_level}%")
+            else:
+                print("❌ Battery level not available via MQTT")
         else:
-            print("❌ Could not read battery level")
+            print("❌ MQTT not available for battery check")
 
     def get_battery_level(self):
-        """Get current battery level - public method for screen integration"""
-        return self.__read_battery_level()
+        """Get current battery level from MQTT state (returns percentage 0-100%)"""
+        if self.__mqtt_client:
+            robot_state = self.__mqtt_client.get_robot_state()
+            return robot_state.get('battery_level', 0) or 0  # Battery percentage (0-100%)
+        return 0  # Return 0% if MQTT not available
 
 
 # Example usage
 if __name__ == "__main__":
     debug_mode = False
-    if len(sys.argv) > 1 and sys.argv[1] == "debug":
+    if len(sys.argv) > 1 and sys.argv[1] == "--debug":
         debug_mode = True
     
     print("🤖 Initializing XGO-RIDER robot...")

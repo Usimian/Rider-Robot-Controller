@@ -14,7 +14,7 @@ These topics are **published by the robot** and **subscribed to by the PC client
 
 #### `rider/status`
 **Frequency**: Every ~2 seconds  
-**Purpose**: Main robot status updates  
+**Purpose**: Main robot status updates including battery information  
 **Message Format**:
 ```json
 {
@@ -27,7 +27,8 @@ These topics are **published by the robot** and **subscribed to by the PC client
   "height": 85,
   "connection_status": "connected",
   "cpu_percent": 15.2,
-  "cpu_load_1min": 0.85
+  "cpu_load_1min": 0.85,
+  "battery_level": 54
 }
 ```
 
@@ -42,25 +43,12 @@ These topics are **published by the robot** and **subscribed to by the PC client
 - `connection_status`: "connected" | "disconnected"
 - `cpu_percent`: Current CPU usage percentage (0.0 - 100.0)
 - `cpu_load_1min`: 1-minute load average (0.0 - 4.0+ typical for 4-core system)
+- `battery_level`: Battery percentage (0-100)
 
-#### `rider/status/battery`
-**Frequency**: Every ~10 seconds  
-**Purpose**: Battery status updates  
-**Message Format**:
-```json
-{
-  "timestamp": 1749239636.9426005,
-  "level": 54,
-  "status": "normal",
-  "source": "hardware"
-}
-```
-
-**Field Descriptions**:
-- `timestamp`: Unix timestamp
-- `level`: Battery percentage (0-100)
-- `status`: "normal" | "low" | "critical" | "charging"
-- `source`: "hardware" | "estimated"
+#### `rider/status/battery` _(DEPRECATED)_
+**Status**: This topic has been consolidated into the main `rider/status` topic  
+**Migration**: Battery information is now included in every `rider/status` message  
+**Reason**: Simplified architecture - all status information in one place
 
 #### `rider/status/imu`
 **Frequency**: ~2Hz (every 0.5 seconds)  
