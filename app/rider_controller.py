@@ -274,6 +274,7 @@ class BluetoothController_Rider(object):
             self.__mqtt_client.set_command_callback('settings', self.__handle_mqtt_settings)
             self.__mqtt_client.set_command_callback('camera', self.__handle_mqtt_camera)
             self.__mqtt_client.set_command_callback('system', self.__handle_mqtt_system)
+            self.__mqtt_client.set_command_callback('image_capture', self.__handle_mqtt_image_capture)
             
             # Connect to MQTT broker
             if self.__mqtt_client.connect():
@@ -389,6 +390,82 @@ class BluetoothController_Rider(object):
             
             # Clear any ongoing action in the controller
             self.__action_in_progress = False
+    
+    def __handle_mqtt_image_capture(self, payload):
+        """Handle image capture requests from MQTT"""
+        request_id = payload.get('request_id', f"img_{int(time.time())}")
+        resolution = payload.get('resolution', 'high')
+        client_id = payload.get('client_id', 'unknown')
+        
+        if self.__debug:
+            print(f"📸 MQTT Image capture request: ID={request_id}, resolution={resolution}, client={client_id}")
+        
+        try:
+            # Check if camera is available and enabled
+            if not self.__video or not self.__video.is_camera_available():
+                return {
+                    'success': False,
+                    'error': 'Camera not available',
+                    'request_id': request_id
+                }
+            
+            if not self.__camera_enabled:
+                return {
+                    'success': False,
+                    'error': 'Camera is disabled - enable camera first',
+                    'request_id': request_id
+                }
+            
+            # Update screen status
+            if self.__screen:
+                self.__screen.update_status("Capturing Image...")
+            
+            # Capture image using the video system
+            image_data = self.__video.capture_image(resolution)
+            
+            if image_data:
+                # Get image size information
+                import base64
+                img_bytes = base64.b64decode(image_data)
+                img_size_kb = len(img_bytes) / 1024
+                
+                # Update screen status
+                if self.__screen:
+                    self.__screen.update_status(f"Image Sent ({img_size_kb:.1f}KB)")
+                
+                if self.__debug:
+                    print(f"✅ Image captured successfully: {img_size_kb:.1f}KB")
+                
+                return {
+                    'success': True,
+                    'image_data': image_data,
+                    'request_id': request_id,
+                    'image_size': f"{img_size_kb:.1f}KB",
+                    'capture_timestamp': time.time()
+                }
+            else:
+                if self.__screen:
+                    self.__screen.update_status("Image Capture Failed")
+                
+                return {
+                    'success': False,
+                    'error': 'Failed to capture image from camera',
+                    'request_id': request_id
+                }
+                
+        except Exception as e:
+            error_msg = f"Image capture error: {str(e)}"
+            if self.__debug:
+                print(f"❌ {error_msg}")
+            
+            if self.__screen:
+                self.__screen.update_status("Image Error")
+            
+            return {
+                'success': False,
+                'error': error_msg,
+                'request_id': request_id
+            }
     
     def __toggle_camera(self):
         """Toggle camera on/off"""

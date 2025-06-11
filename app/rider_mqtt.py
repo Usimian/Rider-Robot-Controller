@@ -89,7 +89,9 @@ class RiderMQTT:
             'control_system': 'rider/control/system',
             'client_heartbeat': 'rider/client/heartbeat',
             'client_disconnect': 'rider/client/disconnect',
-            'server_status': 'rider/server/status'
+            'server_status': 'rider/server/status',
+            'image_capture_request': 'rider/control/image_capture',
+            'image_capture_response': 'rider/response/image_capture'
         }
         
         # Publishing thread
@@ -342,7 +344,8 @@ class RiderMQTT:
                 self.__topics['control_camera'],
                 self.__topics['control_system'],
                 self.__topics['client_heartbeat'],
-                self.__topics['client_disconnect']
+                self.__topics['client_disconnect'],
+                self.__topics['image_capture_request']
             ]
             
             for topic in control_topics:
@@ -398,6 +401,8 @@ class RiderMQTT:
                     self.__handle_client_heartbeat(payload)
                 elif topic == self.__topics['client_disconnect']:
                     self.__handle_client_disconnect(payload)
+                elif topic == self.__topics['image_capture_request']:
+                    self.__handle_image_capture_request(payload)
             except Exception as handler_error:
                 if self.__debug:
                     print(f"⚠️ Error in message handler for {topic}: {handler_error}")
@@ -567,6 +572,85 @@ class RiderMQTT:
         # Trigger callback if set
         if 'camera' in self.__command_callbacks:
             self.__command_callbacks['camera'](payload)
+    
+    def __handle_image_capture_request(self, payload: Dict[str, Any]):
+        """Handle image capture requests"""
+        request_id = payload.get('request_id', f"img_{int(time.time())}")
+        resolution = payload.get('resolution', 'high')  # 'high' or 'low'
+        timestamp = payload.get('timestamp', time.time())
+        client_id = payload.get('client_id', 'unknown')
+        
+        if self.__debug:
+            print(f"📸 Image capture request: ID={request_id}, resolution={resolution}, client={client_id}")
+        
+        try:
+            # Trigger callback to controller to actually capture the image
+            if 'image_capture' in self.__command_callbacks:
+                capture_result = self.__command_callbacks['image_capture'](payload)
+                
+                if capture_result and capture_result.get('success'):
+                    # Send successful response
+                    response_payload = {
+                        'request_id': request_id,
+                        'timestamp': time.time(),
+                        'success': True,
+                        'image_data': capture_result.get('image_data'),
+                        'resolution': resolution,
+                        'client_id': client_id,
+                        'image_size': capture_result.get('image_size', 'unknown'),
+                        'capture_timestamp': capture_result.get('capture_timestamp', timestamp)
+                    }
+                    
+                    if self.__debug:
+                        img_size_info = capture_result.get('image_size', 'unknown')
+                        print(f"✅ Image capture successful: {img_size_info}")
+                else:
+                    # Send failure response
+                    response_payload = {
+                        'request_id': request_id,
+                        'timestamp': time.time(),
+                        'success': False,
+                        'error': capture_result.get('error', 'Unknown capture error') if capture_result else 'Camera not available',
+                        'client_id': client_id
+                    }
+                    
+                    if self.__debug:
+                        error_msg = response_payload['error']
+                        print(f"❌ Image capture failed: {error_msg}")
+            else:
+                # No callback set - camera not available
+                response_payload = {
+                    'request_id': request_id,
+                    'timestamp': time.time(),
+                    'success': False,
+                    'error': 'Image capture not available - no camera handler',
+                    'client_id': client_id
+                }
+                
+                if self.__debug:
+                    print("❌ Image capture failed: No camera handler available")
+            
+            # Publish response
+            self.__publish_json(self.__topics['image_capture_response'], response_payload)
+            
+        except Exception as e:
+            if self.__debug:
+                print(f"❌ Error handling image capture request: {e}")
+            
+            # Send error response
+            error_response = {
+                'request_id': request_id,
+                'timestamp': time.time(),
+                'success': False,
+                'error': f'Server error: {str(e)}',
+                'client_id': client_id
+            }
+            
+            try:
+                self.__publish_json(self.__topics['image_capture_response'], error_response)
+            except Exception as publish_error:
+                if self.__debug:
+                    print(f"❌ Failed to publish error response: {publish_error}")
     
     def __handle_system_command(self, payload: Dict[str, Any]):
         """Handle system control commands"""
@@ -857,6 +941,12 @@ class RiderMQTT:
         battery_level = self.__robot_state['battery_level']
         if battery_level is None:
             battery_level = self.__last_known_battery
+        
+        # If both current and last known battery are None, use a safe default
+        if battery_level is None:
+            battery_level = 50  # Default to 50% if no battery data available
+            if self.__debug:
+                print("⚠️  No battery data available, using default 50%")
         
         # Clamp battery level to valid percentage range (0-100%)
         battery_level = max(0, min(100, battery_level))

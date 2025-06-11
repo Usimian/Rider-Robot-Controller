@@ -8,6 +8,8 @@
 
 import threading
 import time
+import base64
+import io
 import numpy as np
 from PIL import Image
 from typing import Optional, Tuple
@@ -34,6 +36,11 @@ class RiderVideo:
         self.__frame_width = 160   # Doubled size for LCD corner display (was 80)
         self.__frame_height = 120  # Doubled size for LCD corner display (was 60)
         self.__fps = 15          # Moderate FPS to reduce CPU load
+        
+        # Image capture settings
+        self.__capture_width = 640   # Higher resolution for captured images
+        self.__capture_height = 480
+        self.__capture_quality = 85  # JPEG quality for captured images (0-100)
         
         # Check if OpenCV is available
         if not CV2_AVAILABLE:
@@ -81,6 +88,23 @@ class RiderVideo:
                 
                 # Set buffer size to reduce latency
                 self.__camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # type: ignore
+                
+                # TEST: Try to capture a frame during initialization to verify camera works
+                if self.__debug:
+                    print("Testing initial frame capture...")
+                
+                # Give camera time to initialize
+                time.sleep(0.2)
+                
+                # Try to capture a test frame
+                ret, test_frame = self.__camera.read()  # type: ignore
+                if ret and test_frame is not None:
+                    if self.__debug:
+                        print(f"✅ Test frame captured successfully: {test_frame.shape}")
+                else:
+                    if self.__debug:
+                        print("⚠️  Warning: Could not capture test frame during initialization")
+                        # Don't fail completely, but this indicates a potential issue
                 
                 if self.__debug:
                     actual_width = self.__camera.get(cv2.CAP_PROP_FRAME_WIDTH)  # type: ignore
@@ -138,6 +162,8 @@ class RiderVideo:
             
         frame_interval = 1.0 / self.__fps
         last_frame_time = 0
+        consecutive_failures = 0
+        last_error_report = 0
         
         while self.__running and self.is_camera_available():
             current_time = time.time()
@@ -155,9 +181,21 @@ class RiderVideo:
                 # Capture frame
                 ret, frame = self.__camera.read()  # type: ignore
                 if not ret or frame is None:
-                    if self.__debug:
-                        print("Failed to capture frame")
+                    consecutive_failures += 1
+                    
+                    # Only report errors occasionally to avoid spam
+                    if self.__debug and (current_time - last_error_report) > 5.0:
+                        print(f"Failed to capture frame (consecutive failures: {consecutive_failures})")
+                        last_error_report = current_time
+                    
+                    # If too many consecutive failures, sleep longer
+                    if consecutive_failures > 10:
+                        time.sleep(0.5)
+                    
                     continue
+                
+                # Reset failure counter on success
+                consecutive_failures = 0
                 
                 # Resize frame for display
                 resized_frame = cv2.resize(frame, (self.__frame_width, self.__frame_height))  # type: ignore
@@ -175,8 +213,10 @@ class RiderVideo:
                 last_frame_time = current_time
                 
             except Exception as e:
-                if self.__debug:
+                consecutive_failures += 1
+                if self.__debug and (current_time - last_error_report) > 5.0:
                     print(f"Error in capture loop: {e}")
+                    last_error_report = current_time
                 time.sleep(0.1)
     
     def get_current_frame(self) -> Optional[Image.Image]:
@@ -204,3 +244,185 @@ class RiderVideo:
         
         if self.__debug:
             print("RiderVideo cleanup complete")
+
+    def capture_image(self, resolution: str = "high") -> Optional[str]:
+        """
+        Capture a single image and return it as base64 encoded JPEG
+        
+        Args:
+            resolution: "high" (640x480) or "low" (320x240)
+            
+        Returns:
+            Base64 encoded JPEG string, or None if capture failed
+        """
+        if not self.is_camera_available():
+            if self.__debug:
+                print("Cannot capture image - camera not available")
+            return None
+        
+        # Check if streaming is active - if so, we need to pause it to avoid conflicts
+        streaming_was_active = self.__running
+        
+        try:
+            if streaming_was_active:
+                if self.__debug:
+                    print("📷 Pausing streaming for high-quality image capture...")
+                # Temporarily stop streaming to avoid camera conflicts
+                self.stop_streaming()
+                # Give it a moment to fully stop
+                time.sleep(0.2)
+            
+            if self.__debug:
+                print(f"📷 Capturing image at {resolution} resolution directly from camera")
+            
+            # Get target resolution
+            target_width, target_height = self.__get_target_resolution(resolution)
+            
+            # Store original camera settings to restore later
+            original_width = self.__camera.get(cv2.CAP_PROP_FRAME_WIDTH)  # type: ignore
+            original_height = self.__camera.get(cv2.CAP_PROP_FRAME_HEIGHT)  # type: ignore
+            
+            # Set camera to target resolution for capture
+            self.__camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)  # type: ignore
+            self.__camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)  # type: ignore
+            
+            # Give camera time to adjust to new resolution
+            time.sleep(0.1)
+            
+            # Clear camera buffer to get fresh frame at new resolution
+            for _ in range(3):  # Read a few frames to clear buffer
+                self.__camera.read()  # type: ignore
+            
+            # Capture the actual frame we want
+            ret, frame = self.__camera.read()  # type: ignore
+            
+            # Restore original camera settings for streaming
+            self.__camera.set(cv2.CAP_PROP_FRAME_WIDTH, original_width)  # type: ignore
+            self.__camera.set(cv2.CAP_PROP_FRAME_HEIGHT, original_height)  # type: ignore
+            
+            if not ret or frame is None:
+                if self.__debug:
+                    print("❌ Failed to capture image frame at requested resolution")
+                return None
+            
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # type: ignore
+            
+            # Convert to PIL Image
+            pil_image = Image.fromarray(rgb_frame)
+            
+            # Verify we got the expected resolution
+            actual_width, actual_height = pil_image.size
+            if self.__debug:
+                print(f"📷 Captured frame: {actual_width}x{actual_height} (requested: {target_width}x{target_height})")
+            
+            # If camera didn't provide exact resolution, resize as needed
+            if pil_image.size != (target_width, target_height):
+                if self.__debug:
+                    print(f"📏 Resizing from {pil_image.size} to {target_width}x{target_height}")
+                pil_image = pil_image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            
+            # Convert to JPEG and encode as base64
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format='JPEG', quality=self.__capture_quality)
+            img_bytes = buffer.getvalue()
+            
+            # Encode to base64
+            base64_string = base64.b64encode(img_bytes).decode('utf-8')
+            
+            if self.__debug:
+                img_size_kb = len(img_bytes) / 1024
+                print(f"✅ Image captured successfully: {pil_image.size[0]}x{pil_image.size[1]}, {img_size_kb:.1f}KB")
+            
+            return base64_string
+            
+        except Exception as e:
+            if self.__debug:
+                print(f"❌ Error capturing image: {e}")
+            
+            # Fallback: Try to use current streaming frame if direct capture fails
+            try:
+                if self.__debug:
+                    print("🔄 Falling back to streaming frame...")
+                
+                current_frame = self.get_current_frame()
+                if current_frame is not None:
+                    # Get target resolution
+                    target_width, target_height = self.__get_target_resolution(resolution)
+                    
+                    # Resize the current frame
+                    current_frame = current_frame.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                    
+                    # Convert to JPEG and encode as base64
+                    buffer = io.BytesIO()
+                    current_frame.save(buffer, format='JPEG', quality=self.__capture_quality)
+                    img_bytes = buffer.getvalue()
+                    
+                    # Encode to base64
+                    base64_string = base64.b64encode(img_bytes).decode('utf-8')
+                    
+                    if self.__debug:
+                        img_size_kb = len(img_bytes) / 1024
+                        print(f"⚠️  Fallback capture: {current_frame.size[0]}x{current_frame.size[1]}, {img_size_kb:.1f}KB (upscaled)")
+                    
+                    return base64_string
+                    
+            except Exception as fallback_e:
+                if self.__debug:
+                    print(f"❌ Fallback capture also failed: {fallback_e}")
+            
+            return None
+            
+        finally:
+            # Always restart streaming if it was active before
+            if streaming_was_active:
+                if self.__debug:
+                    print("🔄 Restarting streaming...")
+                self.start_streaming()
+                # Give it a moment to restart
+                time.sleep(0.1)
+    
+    def __get_target_resolution(self, resolution: str) -> tuple:
+        """Get target resolution dimensions"""
+        if resolution == "high":
+            return (self.__capture_width, self.__capture_height)
+        else:  # low resolution
+            return (320, 240)
+    
+    def capture_image_file(self, filepath: str, resolution: str = "high") -> bool:
+        """
+        Capture a single image and save it to a file
+        
+        Args:
+            filepath: Path where to save the image
+            resolution: "high" (640x480) or "low" (320x240)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_camera_available():
+            if self.__debug:
+                print("Cannot capture image - camera not available")
+            return False
+        
+        try:
+            # Get base64 encoded image
+            base64_image = self.capture_image(resolution)
+            if base64_image is None:
+                return False
+            
+            # Decode base64 and save to file
+            img_bytes = base64.b64decode(base64_image)
+            
+            with open(filepath, 'wb') as f:
+                f.write(img_bytes)
+            
+            if self.__debug:
+                print(f"📷 Image saved to: {filepath}")
+            
+            return True
+            
+        except Exception as e:
+            if self.__debug:
+                print(f"Error saving image to file: {e}")
+            return False
