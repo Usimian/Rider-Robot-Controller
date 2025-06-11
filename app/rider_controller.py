@@ -401,26 +401,20 @@ class BluetoothController_Rider(object):
             print(f"📸 MQTT Image capture request: ID={request_id}, resolution={resolution}, client={client_id}")
         
         try:
-            # Check if camera is available and enabled
+            # Check if camera hardware is available
             if not self.__video or not self.__video.is_camera_available():
                 return {
                     'success': False,
-                    'error': 'Camera not available',
-                    'request_id': request_id
-                }
-            
-            if not self.__camera_enabled:
-                return {
-                    'success': False,
-                    'error': 'Camera is disabled - enable camera first',
+                    'error': 'Camera hardware not available',
                     'request_id': request_id
                 }
             
             # Update screen status
             if self.__screen:
-                self.__screen.update_status("Capturing Image...")
+                streaming_status = "ON" if self.__camera_enabled else "OFF"
+                self.__screen.update_status(f"Capturing Image... (Stream: {streaming_status})")
             
-            # Capture image using the video system
+            # Capture image using the video system (works regardless of streaming status)
             image_data = self.__video.capture_image(resolution)
             
             if image_data:
@@ -431,17 +425,20 @@ class BluetoothController_Rider(object):
                 
                 # Update screen status
                 if self.__screen:
-                    self.__screen.update_status(f"Image Sent ({img_size_kb:.1f}KB)")
+                    streaming_status = "ON" if self.__camera_enabled else "OFF"
+                    self.__screen.update_status(f"Image Sent ({img_size_kb:.1f}KB) - Stream: {streaming_status}")
                 
                 if self.__debug:
-                    print(f"✅ Image captured successfully: {img_size_kb:.1f}KB")
+                    streaming_note = " (streaming on)" if self.__camera_enabled else " (streaming off)"
+                    print(f"✅ Image captured successfully: {img_size_kb:.1f}KB{streaming_note}")
                 
                 return {
                     'success': True,
                     'image_data': image_data,
                     'request_id': request_id,
                     'image_size': f"{img_size_kb:.1f}KB",
-                    'capture_timestamp': time.time()
+                    'capture_timestamp': time.time(),
+                    'streaming_active': self.__camera_enabled
                 }
             else:
                 if self.__screen:
