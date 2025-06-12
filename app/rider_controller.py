@@ -392,7 +392,7 @@ class BluetoothController_Rider(object):
             self.__action_in_progress = False
     
     def __handle_mqtt_image_capture(self, payload):
-        """Handle image capture requests from MQTT"""
+        """Handle image capture requests from MQTT. Supports 'high', 'low', and 'tiny' (160x120) resolutions."""
         request_id = payload.get('request_id', f"img_{int(time.time())}")
         resolution = payload.get('resolution', 'high')
         client_id = payload.get('client_id', 'unknown')

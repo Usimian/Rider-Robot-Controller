@@ -44,7 +44,7 @@ PC Client  <--(MQTT Response)-- Robot Controller  <--(JPEG Data)---  Camera Hard
 
 **Fields:**
 - `request_id`: Unique identifier for the request
-- `resolution`: "high" (640x480) or "low" (320x240)
+- `resolution`: "high" (640x480), "low" (320x240), or "tiny" (160x120)
 - `timestamp`: Unix timestamp when request was sent
 - `client_id`: Identifier of the requesting client
 
@@ -320,6 +320,12 @@ MQTT message received - Topic: rider/response/image_capture
 - **Format**: JPEG
 - **Quality**: 85%
 - **Typical size**: 8-20KB
+
+### Tiny Resolution ("tiny")
+- **Resolution**: 160x120 pixels
+- **Format**: JPEG
+- **Quality**: 85%
+- **Typical size**: 2-6KB
 
 ## Performance Considerations
 

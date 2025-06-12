@@ -250,7 +250,7 @@ class RiderVideo:
         Capture a single image and return it as base64 encoded JPEG
         
         Args:
-            resolution: "high" (640x480) or "low" (320x240)
+            resolution: "high" (640x480), "low" (320x240), or "tiny" (160x120)
             
         Returns:
             Base64 encoded JPEG string, or None if capture failed
@@ -386,8 +386,13 @@ class RiderVideo:
         """Get target resolution dimensions"""
         if resolution == "high":
             return (self.__capture_width, self.__capture_height)
-        else:  # low resolution
+        elif resolution == "low":
             return (320, 240)
+        elif resolution == "tiny":
+            return (160, 120)
+        else:
+            # Default to high if unknown
+            return (self.__capture_width, self.__capture_height)
     
     def capture_image_file(self, filepath: str, resolution: str = "high") -> bool:
         """
