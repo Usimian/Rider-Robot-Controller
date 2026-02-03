@@ -86,7 +86,7 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
 class ImageCaptureClient:
-    def __init__(self, broker_host="192.168.1.173"):
+    def __init__(self, broker_host="192.168.1.130"):
         self.broker_host = broker_host
         self.client = mqtt.Client(
             callback_api_version=CallbackAPIVersion.VERSION2,
@@ -165,7 +165,7 @@ const mqtt = require('mqtt');
 const fs = require('fs');
 
 class ImageCaptureClient {
-    constructor(brokerHost = '192.168.1.173') {
+    constructor(brokerHost = '192.168.1.130') {
         this.brokerHost = brokerHost;
         this.client = null;
         this.receivedImages = {};
@@ -261,8 +261,8 @@ main();
 ```
 🤖 Rider Robot Image Capture Client Test
 ==================================================
-RiderImageCaptureClient initialized - Broker: 192.168.1.173:1883
-Connecting to MQTT broker at 192.168.1.173:1883
+RiderImageCaptureClient initialized - Broker: 192.168.1.130:1883
+Connecting to MQTT broker at 192.168.1.130:1883
 ✅ MQTT connected successfully
 MQTT broker connected
 Subscribed to: rider/response/image_capture

@@ -177,6 +177,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+browse.vc/
 
 # Robot/Hardware Specific
 *.log

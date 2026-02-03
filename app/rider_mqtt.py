@@ -14,9 +14,10 @@ import psutil
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 from typing import Optional, Callable, Dict, Any
+from config import MQTT_BROKER_HOST, MQTT_BROKER_PORT
 
 class RiderMQTT:
-    def __init__(self, robot=None, broker_host="192.168.1.173", broker_port=1883, debug=False):
+    def __init__(self, robot=None, broker_host=MQTT_BROKER_HOST, broker_port=MQTT_BROKER_PORT, debug=False):
         self.__debug = debug
         self.__robot = robot
         self.__broker_host = broker_host
