@@ -556,7 +556,7 @@ class RiderScreen:
                 new_roll = None
                 new_pitch = None
                 new_yaw = None
-                
+
                 # Read roll with retry
                 if hasattr(self.__robot, 'rider_read_roll'):
                     new_roll = self.__read_sensor_with_retry('roll', self.__robot.rider_read_roll)

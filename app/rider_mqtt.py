@@ -16,7 +16,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 from typing import Optional, Callable, Dict, Any
 
 class RiderMQTT:
-    def __init__(self, robot=None, broker_host="192.168.1.173", broker_port=1883, debug=False):
+    def __init__(self, robot=None, broker_host="localhost", broker_port=1883, debug=False):
         self.__debug = debug
         self.__robot = robot
         self.__broker_host = broker_host
@@ -541,8 +541,22 @@ class RiderMQTT:
                     if self.__debug:
                         print(f"   🏃 Speed changed to {new_speed}x")
                 
+                elif action == 'change_height':
+                    new_height = payload.get('value', 85)
+                    # Validate height range (60-120mm)
+                    new_height = max(60, min(120, new_height))
+                    self.__robot_state['height'] = new_height
+                    # Call XGO method to change height
+                    self.__robot.rider_height(new_height)
+                    if self.__debug:
+                        print(f"   📏 Height changed to {new_height}mm")
+                
                 # Publish updated status after settings change
                 self.__publish_status()
+                
+                # For height changes, also reset the publish timer to ensure immediate feedback
+                if action == 'change_height':
+                    self.__last_status_publish = time.time()
                 
             except Exception as e:
                 if self.__debug:
@@ -803,9 +817,23 @@ class RiderMQTT:
     
     def __publishing_loop(self):
         """Main publishing loop"""
+        # Initialize CPU monitoring with a blocking call
+        # This primes psutil for subsequent non-blocking calls
+        try:
+            psutil.cpu_percent(interval=0.1)
+        except:
+            pass
+        
         while self.__running and self.__connected:
             try:
                 current_time = time.time()
+                
+                # Sample CPU usage periodically (non-blocking after first call)
+                # This keeps the CPU data fresh for status publishing
+                try:
+                    psutil.cpu_percent(interval=None)  # Non-blocking sample
+                except:
+                    pass
                 
                 # Publish status updates
                 if current_time - self.__last_status_publish >= self.__status_interval:
@@ -1008,9 +1036,10 @@ class RiderMQTT:
     def __get_cpu_data(self):
         """Read current CPU usage and load average data"""
         try:
-            # Get CPU usage percentage with short interval for accuracy
-            # Using 0.1 second interval for more reliable readings
-            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=0.1)
+            # Get CPU usage percentage without blocking
+            # Using interval=None uses the previous call's measurement (non-blocking)
+            # Falls back to 0 on first call
+            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=None)
             
             # Get load average (1 minute only)
             load_avg = os.getloadavg()

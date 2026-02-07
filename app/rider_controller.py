@@ -342,6 +342,14 @@ class BluetoothController_Rider(object):
                 if self.__screen:
                     self.__screen.update_speed(self.__speed_scale)
         
+        elif action == 'change_height':
+            # Sync local state with MQTT state
+            if self.__mqtt_client:
+                robot_state = self.__mqtt_client.get_robot_state()
+                self.__height = robot_state['height']
+                if self.__debug:
+                    print(f"📏 Height synced from MQTT: {self.__height}mm")
+        
     def __handle_mqtt_camera(self, payload):
         """Handle camera commands from MQTT"""
         if self.__debug:
