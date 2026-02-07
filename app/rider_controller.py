@@ -350,6 +350,13 @@ class BluetoothController_Rider(object):
                 if self.__debug:
                     print(f"📏 Height synced from MQTT: {self.__height}mm")
         
+        elif action == 'change_body_tilt':
+            # Body tilt is applied directly by MQTT handler
+            # No local state to sync for tilt (it's a momentary adjustment)
+            if self.__debug:
+                tilt_value = payload.get('value', 0)
+                print(f"🎯 Body tilt command received: {tilt_value}°")
+        
     def __handle_mqtt_camera(self, payload):
         """Handle camera commands from MQTT"""
         if self.__debug:

@@ -7,8 +7,8 @@ Centralized configuration file for easy modification of settings
 """
 
 # MQTT Broker Configuration
-# Modify this IP address to match your MQTT broker location
-MQTT_BROKER_HOST = "192.168.1.130"
+# The robot runs its own MQTT broker locally
+MQTT_BROKER_HOST = "localhost"  # Robot's local MQTT broker
 MQTT_BROKER_PORT = 1883
 
 # Robot Serial Configuration
