@@ -4,7 +4,7 @@ This document describes the complete MQTT communication protocol between the PC 
 
 ## Connection Details
 - **Protocol**: MQTT 5.0
-- **Default Broker**: 192.168.1.173:1883
+- **Default Broker**: 192.168.1.130:1883
 - **Client ID Format**: `rider_pc_client_{timestamp}` or `robot_tester_{timestamp}`
 
 ## Topic Structure

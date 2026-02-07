@@ -14,9 +14,10 @@ import psutil
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 from typing import Optional, Callable, Dict, Any
+from config import MQTT_BROKER_HOST, MQTT_BROKER_PORT
 
 class RiderMQTT:
-    def __init__(self, robot=None, broker_host="localhost", broker_port=1883, debug=False):
+    def __init__(self, robot=None, broker_host=MQTT_BROKER_HOST, broker_port=MQTT_BROKER_PORT, debug=False):
         self.__debug = debug
         self.__robot = robot
         self.__broker_host = broker_host
@@ -546,17 +547,32 @@ class RiderMQTT:
                     # Validate height range (60-120mm)
                     new_height = max(60, min(120, new_height))
                     self.__robot_state['height'] = new_height
-                    # Call XGO method to change height
+                    # Call XGO method to change height (non-blocking, instant)
                     self.__robot.rider_height(new_height)
                     if self.__debug:
                         print(f"   📏 Height changed to {new_height}mm")
                 
-                # Publish updated status after settings change
-                self.__publish_status()
+                elif action == 'change_body_tilt':
+                    new_tilt = payload.get('value', 0)
+                    # Validate tilt range (-30 to +30 degrees)
+                    new_tilt = max(-30, min(30, new_tilt))
+                    
+                    # Only apply tilt if roll balance is NOT enabled
+                    if not self.__robot_state['roll_balance_enabled']:
+                        # Call XGO method to change tilt (non-blocking, instant)
+                        self.__robot.rider_roll(new_tilt)
+                        if self.__debug:
+                            print(f"   🎯 Body tilt changed to {new_tilt}°")
+                    else:
+                        if self.__debug:
+                            print(f"   ⚠️  Body tilt ignored - roll balance is enabled")
                 
-                # For height changes, also reset the publish timer to ensure immediate feedback
-                if action == 'change_height':
-                    self.__last_status_publish = time.time()
+                # For height/tilt changes, don't publish status immediately to avoid delays
+                # The periodic status updates will reflect the changes within 2 seconds
+                # Only publish for mode changes that need immediate UI feedback
+                if action not in ['change_height', 'change_body_tilt']:
+                    # Publish updated status after settings change
+                    self.__publish_status()
                 
             except Exception as e:
                 if self.__debug:
