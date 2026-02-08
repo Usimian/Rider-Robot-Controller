@@ -30,8 +30,11 @@ class RiderScreen:
         self.__running = False
         
         # Display settings
-        self.__update_interval = 1.0  # Update every second
+        self.__update_interval = 2.0  # Update every 2 seconds for general info
         self.__last_update = 0
+        self.__video_update_interval = 1.0 / 15.0  # 15 FPS for video (0.067 seconds)
+        self.__last_video_update = 0
+        self.__video_frame_position = (150, 80)  # Position of video frame on screen
         
         # Current values to display
         self.__battery_level = 0
@@ -75,6 +78,13 @@ class RiderScreen:
         
         # Initialize button for interaction
         self.__button = Button()
+        
+        # Initialize CPU monitoring with a blocking call to prime psutil
+        # This allows subsequent non-blocking calls to work
+        try:
+            psutil.cpu_percent(interval=0.1)
+        except:
+            pass
         
         # Video will be set up externally by the controller
         # self.__setup_video()
@@ -328,8 +338,9 @@ class RiderScreen:
     def __read_cpu_data(self):
         """Read CPU load and usage data"""
         try:
-            # Get CPU usage percentage with short interval for accuracy
-            self.__cpu_percent = psutil.cpu_percent(interval=0.1)
+            # Get CPU usage percentage without blocking (non-blocking call)
+            # Use interval=None to get cached value from last call
+            self.__cpu_percent = psutil.cpu_percent(interval=None)
             
             # Get load average (1 minute only)
             load_avg = os.getloadavg()
@@ -403,7 +414,8 @@ class RiderScreen:
         self.__draw_odometry_info(20, video_y - 40)
         
         # Show sensor status if there are issues (debug info)
-        if self.__debug or self.__sensor_read_failures > 0 or self.__battery_read_failures > 0:
+        # Only show if debug is enabled OR if there are significant failures (>10)
+        if self.__debug or self.__sensor_read_failures > 10 or self.__battery_read_failures > 10:
             status_text = f"S:{self.__sensor_read_failures} B:{self.__battery_read_failures}"
             if self.__consecutive_successful_reads > 0:
                 status_text += f" OK:{self.__consecutive_successful_reads}"
@@ -454,6 +466,21 @@ class RiderScreen:
         if self.__debug:
             print(f"Status updated: {self.__robot_status}")
     
+    def update_imu_data(self, roll, pitch, yaw):
+        """Update IMU data from external source (e.g., MQTT)"""
+        self.__roll = float(roll)
+        self.__pitch = float(pitch)
+        self.__yaw = float(yaw)
+        # Update last good values
+        self.__last_good_roll = self.__roll
+        self.__last_good_pitch = self.__pitch
+        self.__last_good_yaw = self.__yaw
+        # Reset failure counters since we have good data
+        self.__sensor_read_failures = 0
+        self.__consecutive_successful_reads += 1
+        if self.__debug:
+            print(f"IMU data updated: Roll={roll:.1f}° Pitch={pitch:.1f}° Yaw={yaw:.1f}°")
+    
     def set_video_instance(self, video_instance):
         """Set the video instance from external controller"""
         self.__video = video_instance
@@ -469,12 +496,15 @@ class RiderScreen:
         if self.__robot is not None:
             try:
                 # Battery reading is now handled by MQTT status updates only
-                # Only read IMU/odometry and CPU data here
+                # IMU data should primarily come from MQTT to avoid read conflicts
+                # Only read IMU as fallback if we have excessive failures
                 
-                # Read odometry data
-                self.__read_odometry_data()
+                # Only attempt direct IMU read if we have many consecutive failures
+                # This prevents conflicting reads with MQTT
+                if self.__sensor_read_failures > 5:
+                    self.__read_odometry_data()
                 
-                # Read CPU data
+                # Read CPU data (this is safe to read locally)
                 self.__read_cpu_data()
                     
             except Exception as e:

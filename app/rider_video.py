@@ -260,7 +260,39 @@ class RiderVideo:
                 print("Cannot capture image - camera not available")
             return None
         
-        # Check if streaming is active - if so, we need to pause it to avoid conflicts
+        # FAST PATH: If streaming is active, use the latest frame from the capture thread
+        # This is much faster than stopping/reconfiguring/restarting the camera
+        if self.__running:
+            try:
+                current_frame = self.get_current_frame()
+                if current_frame is not None:
+                    # Get target resolution
+                    target_width, target_height = self.__get_target_resolution(resolution)
+                    
+                    # Resize the current frame if needed
+                    if current_frame.size != (target_width, target_height):
+                        current_frame = current_frame.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                    
+                    # Convert to JPEG and encode as base64
+                    buffer = io.BytesIO()
+                    current_frame.save(buffer, format='JPEG', quality=self.__capture_quality)
+                    img_bytes = buffer.getvalue()
+                    
+                    # Encode to base64
+                    base64_string = base64.b64encode(img_bytes).decode('utf-8')
+                    
+                    if self.__debug:
+                        img_size_kb = len(img_bytes) / 1024
+                        print(f"✅ Fast capture from stream: {current_frame.size[0]}x{current_frame.size[1]}, {img_size_kb:.1f}KB")
+                    
+                    return base64_string
+            except Exception as e:
+                if self.__debug:
+                    print(f"⚠️ Fast path failed, falling back to slow capture: {e}")
+                # Fall through to slow path below
+        
+        # SLOW PATH: Only used when streaming is not active
+        # This path stops streaming, reconfigures camera, and captures
         streaming_was_active = self.__running
         
         try:
@@ -339,38 +371,6 @@ class RiderVideo:
         except Exception as e:
             if self.__debug:
                 print(f"❌ Error capturing image: {e}")
-            
-            # Fallback: Try to use current streaming frame if direct capture fails
-            try:
-                if self.__debug:
-                    print("🔄 Falling back to streaming frame...")
-                
-                current_frame = self.get_current_frame()
-                if current_frame is not None:
-                    # Get target resolution
-                    target_width, target_height = self.__get_target_resolution(resolution)
-                    
-                    # Resize the current frame
-                    current_frame = current_frame.resize((target_width, target_height), Image.Resampling.LANCZOS)
-                    
-                    # Convert to JPEG and encode as base64
-                    buffer = io.BytesIO()
-                    current_frame.save(buffer, format='JPEG', quality=self.__capture_quality)
-                    img_bytes = buffer.getvalue()
-                    
-                    # Encode to base64
-                    base64_string = base64.b64encode(img_bytes).decode('utf-8')
-                    
-                    if self.__debug:
-                        img_size_kb = len(img_bytes) / 1024
-                        print(f"⚠️  Fallback capture: {current_frame.size[0]}x{current_frame.size[1]}, {img_size_kb:.1f}KB (upscaled)")
-                    
-                    return base64_string
-                    
-            except Exception as fallback_e:
-                if self.__debug:
-                    print(f"❌ Fallback capture also failed: {fallback_e}")
-            
             return None
             
         finally:

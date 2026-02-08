@@ -92,7 +92,7 @@ class BluetoothController_Rider(object):
         # Initialize LCD screen display if available
         self.__screen = None
         self.__screen_last_update = 0
-        self.__screen_update_interval = 2.0  # Update screen every 2 seconds
+        self.__screen_update_interval = 2.0  # Update robot screen every 2 seconds
         
         # Initialize MQTT communication
         self.__mqtt_client = None
@@ -1124,12 +1124,18 @@ class BluetoothController_Rider(object):
                 # Update LCD screen periodically
                 if self.__screen and time.time() - self.__screen_last_update >= self.__screen_update_interval:
                     try:
-                        # Update battery level from MQTT status before refreshing screen
+                        # Update battery level and IMU data from MQTT status before refreshing screen
                         if self.__mqtt_client:
                             robot_state = self.__mqtt_client.get_robot_state()
                             current_battery = robot_state.get('battery_level', 0) or 0
                             if current_battery > 0:
                                 self.__screen.update_battery(current_battery)
+                            
+                            # Update IMU data from MQTT to avoid conflicting reads
+                            roll = robot_state.get('roll', 0.0)
+                            pitch = robot_state.get('pitch', 0.0)
+                            yaw = robot_state.get('yaw', 0.0)
+                            self.__screen.update_imu_data(roll, pitch, yaw)
                         
                         # Pass controller status from main controller to screen
                         self.__screen.refresh_and_update_display(self.__controller_connected)
@@ -1209,12 +1215,18 @@ class BluetoothController_Rider(object):
                 # Update screen status
                 if self.__screen:
                     try:
-                        # Update battery level from MQTT even while waiting
+                        # Update battery level and IMU data from MQTT even while waiting
                         if self.__mqtt_client:
                             robot_state = self.__mqtt_client.get_robot_state()
                             current_battery = robot_state.get('battery_level', 0) or 0
                             if current_battery > 0:
                                 self.__screen.update_battery(current_battery)
+                            
+                            # Update IMU data from MQTT
+                            roll = robot_state.get('roll', 0.0)
+                            pitch = robot_state.get('pitch', 0.0)
+                            yaw = robot_state.get('yaw', 0.0)
+                            self.__screen.update_imu_data(roll, pitch, yaw)
                         
                         # Pass disconnected status to screen during waiting
                         self.__screen.refresh_and_update_display(False)
