@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # coding=utf-8
 
 # Rider Robot MQTT Communication Module
@@ -1311,10 +1310,9 @@ class RiderMQTT:
     def __get_cpu_data(self):
         """Read current CPU usage and load average data"""
         try:
-            # Get CPU usage percentage without blocking
-            # Using interval=None uses the previous call's measurement (non-blocking)
-            # Falls back to 0 on first call
-            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=None)
+            # Get CPU usage with small interval for stable readings
+            # interval=0.1 gives accurate readings without blocking too long
+            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=0.1)
             
             # Get load average (1 minute only)
             load_avg = os.getloadavg()
@@ -1329,7 +1327,16 @@ class RiderMQTT:
             # Set default values on error
             self.__robot_state['cpu_percent'] = 0.0
             self.__robot_state['cpu_load_1min'] = 0.0
-    
+
+    def get_cpu_load_data(self):
+        """Public method to get current CPU and Load data for screen display
+        Returns: tuple (cpu_percent, cpu_load_1min)
+        """
+        return (
+            self.__robot_state.get('cpu_percent', 0.0),
+            self.__robot_state.get('cpu_load_1min', 0.0)
+        )
+
     def __publish_json(self, topic: str, data: Dict[str, Any]):
         """Publish JSON data to MQTT topic"""
         if not self.__client or not self.__connected:

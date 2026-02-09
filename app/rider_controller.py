@@ -292,7 +292,9 @@ class BluetoothController_Rider(object):
             # Connect to MQTT broker
             if self.__mqtt_client.connect():
                 print("✅ MQTT communication enabled")
+                # Provide MQTT client reference to screen for CPU/Load data
                 if self.__screen:
+                    self.__screen.set_mqtt_client(self.__mqtt_client)
                     self.__screen.update_status("MQTT: Connected")
             else:
                 print("⚠️  MQTT broker connection failed")

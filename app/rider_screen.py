@@ -24,9 +24,10 @@ except ImportError:
         print("⚠️  Video module not available - video display disabled")
 
 class RiderScreen:
-    def __init__(self, robot=None, debug=False):
+    def __init__(self, robot=None, mqtt_client=None, debug=False):
         self.__debug = debug
         self.__robot = robot
+        self.__mqtt_client = mqtt_client
         self.__running = False
         
         # Display settings
@@ -64,33 +65,32 @@ class RiderScreen:
         self.__consecutive_successful_reads = 0
         self.__reset_failure_count_threshold = 10  # Reset failure counters after 10 successful reads
         
-        # CPU load data
+        # CPU load data (will be fetched from MQTT client)
         self.__cpu_load_1min = 0.0
         self.__cpu_percent = 0.0
-        
+
         # Video settings
         self.__video = None
         self.__video_enabled = False
         self.__last_video_frame = None
-        
+
         # Initialize LCD display
         self.__setup_display()
-        
+
         # Initialize button for interaction
         self.__button = Button()
-        
-        # Initialize CPU monitoring with a blocking call to prime psutil
-        # This allows subsequent non-blocking calls to work
-        try:
-            psutil.cpu_percent(interval=0.1)
-        except:
-            pass
         
         # Video will be set up externally by the controller
         # self.__setup_video()
         
         if self.__debug:
             print("RiderScreen initialized")
+
+    def set_mqtt_client(self, mqtt_client):
+        """Set the MQTT client reference for accessing CPU/Load data"""
+        self.__mqtt_client = mqtt_client
+        if self.__debug:
+            print("RiderScreen: MQTT client reference set")
     
     def __setup_video(self):
         """Initialize video streaming if available"""
@@ -338,13 +338,13 @@ class RiderScreen:
     def __read_cpu_data(self):
         """Read CPU load and usage data"""
         try:
-            # Get CPU usage percentage without blocking (non-blocking call)
-            # Use interval=None to get cached value from last call
-            self.__cpu_percent = psutil.cpu_percent(interval=None)
-            
-            # Get load average (1 minute only)
-            load_avg = os.getloadavg()
-            self.__cpu_load_1min = load_avg[0]
+            # Get CPU and Load data from MQTT client (single source of truth)
+            if self.__mqtt_client:
+                self.__cpu_percent, self.__cpu_load_1min = self.__mqtt_client.get_cpu_load_data()
+            else:
+                # Fallback if MQTT client not available
+                self.__cpu_percent = 0.0
+                self.__cpu_load_1min = 0.0
         except Exception as e:
             if self.__debug:
                 print(f"Error reading CPU data: {e}")
