@@ -152,6 +152,19 @@ class BluetoothController_Rider(object):
         
         # Battery reading is now handled by MQTT status updates only
         print("✅ Battery monitoring will be handled via MQTT status updates")
+
+        # Say hello after initialization
+        try:
+            import subprocess
+            import threading
+            def say_hello():
+                try:
+                    subprocess.run(['espeak', '-v', 'en', 'Hello, I am ready'], check=False, stderr=subprocess.DEVNULL)
+                except:
+                    pass
+            threading.Thread(target=say_hello, daemon=True).start()
+        except:
+            pass
     
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""

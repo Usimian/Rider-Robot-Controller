@@ -10,6 +10,7 @@ import json
 import time
 import threading
 import os
+import subprocess
 import psutil
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
@@ -92,7 +93,8 @@ class RiderMQTT:
             'client_disconnect': 'rider/client/disconnect',
             'server_status': 'rider/server/status',
             'image_capture_request': 'rider/control/image_capture',
-            'image_capture_response': 'rider/response/image_capture'
+            'image_capture_response': 'rider/response/image_capture',
+            'movement_response': 'rider/response/movement'
         }
         
         # Publishing thread
@@ -451,11 +453,247 @@ class RiderMQTT:
         self.publish_event('client_disconnect_ack', disconnect_ack)
     
     def __handle_movement_command(self, payload: Dict[str, Any]):
-        """Handle movement control commands with enhanced safety tracking"""
-        x = payload.get('x', 0)  # -100 to +100 (left/right)
-        y = payload.get('y', 0)  # -100 to +100 (backward/forward)
+        """Handle movement control commands with enhanced safety tracking
+        
+        Supports two command formats:
+        1. Legacy joystick control: {"x": 0-100, "y": 0-100}
+        2. New movement commands: {"action": "move/turn/stop", "distance": mm, "angle": degrees}
+        """
         timestamp = payload.get('timestamp', time.time())
         source = payload.get('source', 'client')
+        
+        # Check if this is a new-style movement command
+        action = payload.get('action')
+        
+        if action:
+            # New movement command format
+            self.__handle_action_command(payload, timestamp, source)
+        else:
+            # Legacy joystick control format
+            self.__handle_joystick_command(payload, timestamp, source)
+    
+    def __handle_action_command(self, payload: Dict[str, Any], timestamp: float, source: str):
+        """Handle new action-based movement commands (move, turn, stop)"""
+        action = payload.get('action')
+        
+        if self.__debug:
+            print(f"🎯 Action command: {action}, timestamp={timestamp}, source={source}")
+        
+        if action == 'stop':
+            # Emergency stop command
+            self.__stop_robot_movement()
+            if self.__debug:
+                print("   🛑 STOP command executed")
+            
+            # Update movement tracking
+            self.__last_movement_command = {
+                'x': 0,
+                'y': 0,
+                'timestamp': timestamp,
+                'source': source
+            }
+            
+            # Publish completion status
+            self.__publish_movement_completion('stop', success=True)
+            
+        elif action == 'move':
+            # Linear movement command
+            distance_mm = payload.get('distance', 0)
+            
+            if self.__debug:
+                direction = "forward" if distance_mm > 0 else "backward"
+                print(f"   ➡ Moving {direction} {abs(distance_mm)}mm")
+            
+            # Execute movement using threaded handler to avoid blocking
+            movement_thread = threading.Thread(
+                target=self.__execute_linear_movement,
+                args=(distance_mm, timestamp, source),
+                daemon=True
+            )
+            movement_thread.start()
+            
+        elif action == 'turn':
+            # Rotation command
+            angle_deg = payload.get('angle', 0)
+            
+            if self.__debug:
+                direction = "right" if angle_deg > 0 else "left"
+                print(f"   🔄 Turning {direction} {abs(angle_deg)}°")
+            
+            # Execute turn using threaded handler to avoid blocking
+            turn_thread = threading.Thread(
+                target=self.__execute_turn_movement,
+                args=(angle_deg, timestamp, source),
+                daemon=True
+            )
+            turn_thread.start()
+        
+        elif action == 'speak':
+            # Text-to-speech command
+            text = payload.get('text', '')
+            print(f'[MQTT-TTS] Received speak command: {text}')
+            with open('/tmp/tts_debug.log', 'a') as f:
+                import datetime
+                f.write(f'{datetime.datetime.now()} - Speak command: {text}\n')
+            
+            if self.__debug:
+                print(f"   🔊 Speaking: {text}")
+            
+            # Execute TTS in background thread to avoid blocking
+            def speak_text():
+                import datetime
+                with open('/tmp/tts_execution.log', 'a') as log:
+                    log.write(f'{datetime.datetime.now()} - Starting speak_text() for text: {text}\n')
+                    log.flush()
+                try:
+                    print(f'[MQTT-TTS] About to call espeak for: {text}')
+                    with open('/tmp/tts_execution.log', 'a') as log:
+                        log.write(f'About to run espeak command\n')
+                        log.flush()
+
+                    # Run espeak (subprocess now properly imported!)
+                    result = subprocess.run(['espeak', '-v', 'en', text],
+                                          check=False,
+                                          stderr=subprocess.DEVNULL)
+                    returncode = result.returncode
+
+                    with open('/tmp/tts_execution.log', 'a') as log:
+                        log.write(f'espeak completed - returncode: {returncode}\n')
+                        log.flush()
+                    print(f'[MQTT-TTS] espeak completed with code {returncode}')
+                except subprocess.TimeoutExpired:
+                    with open('/tmp/tts_execution.log', 'a') as log:
+                        log.write(f'espeak TIMEOUT after 10 seconds\n')
+                        log.flush()
+                    print(f'[MQTT-TTS] espeak timed out')
+                except Exception as e:
+                    print(f'[MQTT-TTS] TTS error: {e}')
+                    with open('/tmp/tts_execution.log', 'a') as log:
+                        log.write(f'Error: {e}\n')
+                        log.flush()
+                    import traceback
+                    traceback.print_exc()
+            
+            tts_thread = threading.Thread(target=speak_text, daemon=True)
+            tts_thread.start()
+        
+        else:
+            if self.__debug:
+                print(f"   ⚠️ Unknown action: {action}")
+    
+    def __execute_linear_movement(self, distance_mm: int, timestamp: float, source: str):
+        """Execute linear movement and stop when complete"""
+        if not self.__robot:
+            return
+        
+        try:
+            # Calculate movement parameters
+            # Typical speed for rider: ~100mm/s at speed 0.3
+            # Adjust these values based on testing
+            base_speed = 0.3  # Base forward speed
+            speed_mm_per_sec = 100.0  # Approximate speed in mm/s at base_speed
+            
+            # Calculate speed and duration
+            if distance_mm > 0:
+                # Forward movement
+                speed = base_speed * self.__robot_state['speed_scale']
+                duration = abs(distance_mm) / speed_mm_per_sec
+            else:
+                # Backward movement (may need adjustment)
+                speed = -base_speed * self.__robot_state['speed_scale'] * 1.5  # Backward compensation
+                duration = abs(distance_mm) / speed_mm_per_sec
+            
+            if self.__debug:
+                print(f"   📐 Movement params: speed={speed:.3f}, duration={duration:.2f}s")
+            
+            # Start movement
+            self.__robot.rider_move_x(speed)
+            
+            # Wait for completion
+            time.sleep(duration)
+            
+            # Stop movement
+            self.__robot.rider_move_x(0)
+            
+            if self.__debug:
+                print(f"   ✅ Movement completed: {distance_mm}mm")
+            
+            # Publish completion status
+            self.__publish_movement_completion('move', success=True, 
+                                              distance=distance_mm, 
+                                              actual_duration=duration)
+            
+        except Exception as e:
+            if self.__debug:
+                print(f"❌ Error executing linear movement: {e}")
+            # Ensure robot is stopped on error
+            try:
+                self.__robot.rider_move_x(0)
+            except:
+                pass
+            # Publish failure status
+            self.__publish_movement_completion('move', success=False, 
+                                              distance=distance_mm,
+                                              error=str(e))
+    
+    def __execute_turn_movement(self, angle_deg: int, timestamp: float, source: str):
+        """Execute turn movement and stop when complete"""
+        if not self.__robot:
+            return
+        
+        try:
+            # Calculate turn parameters
+            # Typical turn rate: ~30 degrees/second at turn_speed 30
+            base_turn_speed = 50  # Base turn speed value
+            degrees_per_sec = 30.0  # Approximate turn rate
+            
+            # Calculate turn speed and duration
+            if angle_deg > 0:
+                # Turn right (positive)
+                turn_speed = base_turn_speed
+            else:
+                # Turn left (negative)
+                turn_speed = -base_turn_speed
+            
+            duration = abs(angle_deg) / degrees_per_sec
+            
+            if self.__debug:
+                print(f"   📐 Turn params: speed={turn_speed}, duration={duration:.2f}s")
+            
+            # Start turning
+            self.__robot.rider_turn(turn_speed)
+            
+            # Wait for completion
+            time.sleep(duration)
+            
+            # Stop turning
+            self.__robot.rider_turn(0)
+            
+            if self.__debug:
+                print(f"   ✅ Turn completed: {angle_deg}°")
+            
+            # Publish completion status
+            self.__publish_movement_completion('turn', success=True,
+                                              angle=angle_deg,
+                                              actual_duration=duration)
+            
+        except Exception as e:
+            if self.__debug:
+                print(f"❌ Error executing turn movement: {e}")
+            # Ensure robot is stopped on error
+            try:
+                self.__robot.rider_turn(0)
+            except:
+                pass
+            # Publish failure status
+            self.__publish_movement_completion('turn', success=False,
+                                              angle=angle_deg,
+                                              error=str(e))
+    
+    def __handle_joystick_command(self, payload: Dict[str, Any], timestamp: float, source: str):
+        """Handle legacy joystick control commands"""
+        x = payload.get('x', 0)  # -100 to +100 (left/right)
+        y = payload.get('y', 0)  # -100 to +100 (backward/forward)
         
         # Update movement command tracking for timeout monitoring
         self.__last_movement_command = {
@@ -466,7 +704,7 @@ class RiderMQTT:
         }
         
         if self.__debug:
-            print(f"🎮 Movement command: x={x}, y={y}, timestamp={timestamp}, source={source}")
+            print(f"🎮 Joystick command: x={x}, y={y}, timestamp={timestamp}, source={source}")
         
         # Convert x,y values (-100 to +100) to robot movement commands
         if self.__robot:
@@ -499,7 +737,7 @@ class RiderMQTT:
                         
             except Exception as e:
                 if self.__debug:
-                    print(f"❌ Error executing movement command: {e}")
+                    print(f"❌ Error executing joystick command: {e}")
                 # On movement command error, ensure robot is stopped
                 try:
                     self.__stop_robot_movement()
@@ -509,6 +747,27 @@ class RiderMQTT:
         # Trigger callback if set
         if 'movement' in self.__command_callbacks:
             self.__command_callbacks['movement'](payload)
+    
+    def __publish_movement_completion(self, action: str, success: bool, **kwargs):
+        """Publish movement completion status"""
+        if not self.__connected:
+            return
+        
+        completion_data = {
+            'timestamp': time.time(),
+            'action': action,
+            'success': success
+        }
+        
+        # Add additional parameters
+        completion_data.update(kwargs)
+        
+        # Publish to movement response topic
+        self.__publish_json(self.__topics['movement_response'], completion_data)
+        
+        if self.__debug:
+            status = "✅ Success" if success else "❌ Failed"
+            print(f"   📡 Movement completion published: {action} - {status}")
     
     def __handle_settings_command(self, payload: Dict[str, Any]):
         """Handle settings control commands"""

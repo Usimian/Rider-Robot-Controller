@@ -100,8 +100,11 @@ These topics are **published by the PC client** and **subscribed to by the robot
 
 #### `rider/control/movement`
 **Purpose**: Movement commands  
-**Triggered by**: Arrow buttons in PC client  
-**Message Format**:
+**Triggered by**: Arrow buttons in PC client or autonomous movement commands
+
+**Message Formats**:
+
+**Format 1: Legacy Joystick Control** (continuous movement):
 ```json
 {
   "x": 0,
@@ -115,7 +118,79 @@ These topics are **published by the PC client** and **subscribed to by the robot
 - `y`: Forward/backward movement (-100 to +100, negative = backward, positive = forward)
 - `timestamp`: Unix timestamp when command was sent
 
-**Expected Robot Response**: No direct response, but movement should be reflected in robot behavior.
+**Format 2: Action-Based Movement** (autonomous, auto-stopping):
+
+**Move Command** (linear movement):
+```json
+{
+  "action": "move",
+  "distance": 200,
+  "timestamp": 1749239765.7873564
+}
+```
+- `distance`: Integer, millimeters to move
+  - Positive = Forward
+  - Negative = Backward
+- Example: `{"action": "move", "distance": 200}` = Move forward 200mm
+
+**Turn Command** (rotation):
+```json
+{
+  "action": "turn",
+  "angle": -90,
+  "timestamp": 1749239765.7873564
+}
+```
+- `angle`: Integer, degrees to rotate
+  - Positive = Turn Right
+  - Negative = Turn Left
+- Example: `{"action": "turn", "angle": -90}` = Turn left 90 degrees
+
+**Stop Command** (emergency):
+```json
+{
+  "action": "stop",
+  "timestamp": 1749239765.7873564
+}
+```
+- Immediately halt all movement
+
+**Expected Robot Response**: 
+- **Legacy format**: No direct response, but movement should be reflected in robot behavior
+- **Action format**: Robot publishes completion status to `rider/response/movement` when movement finishes
+
+---
+
+### 3. Response Topics (Robot → PC Client)
+
+#### `rider/response/movement`
+**Purpose**: Movement completion notifications for action-based commands  
+**Published by**: Robot (automatically after action completion)  
+**Message Format**:
+```json
+{
+  "timestamp": 1749239770.1234567,
+  "action": "move",
+  "success": true,
+  "distance": 200,
+  "actual_duration": 2.5
+}
+```
+
+**Field Descriptions**:
+- `timestamp`: Unix timestamp when movement completed
+- `action`: Type of action completed ("move", "turn", or "stop")
+- `success`: Boolean indicating if movement completed successfully
+- `distance`: (move only) Distance traveled in mm
+- `angle`: (turn only) Angle turned in degrees
+- `actual_duration`: Actual time taken in seconds
+- `error`: (on failure) Error message string
+
+**Implementation Notes**:
+1. Robot calculates speed/duration internally based on distance/angle
+2. Robot stops automatically when target distance/angle is reached
+3. Commands execute sequentially (wait for completion before accepting next command)
+4. Completion status is published when movement finishes
 
 #### `rider/control/settings`
 **Purpose**: Robot settings configuration  
