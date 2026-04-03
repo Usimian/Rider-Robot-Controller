@@ -30,7 +30,7 @@ class RiderMQTT:
         self.__running = False
         
         # Connection monitoring
-        self.__connection_timeout = 30.0  # 30 seconds timeout for client inactivity
+        self.__connection_timeout = 7.0   # 7 seconds timeout for client inactivity (fallback if disconnect msg lost)
         self.__last_client_activity = time.time()
         self.__client_heartbeat_topic = 'rider/client/heartbeat'
         self.__inactive_client_safety_triggered = False
@@ -65,7 +65,7 @@ class RiderMQTT:
             'height': 85,
             'connection_status': 'disconnected',
             'cpu_percent': 0.0,
-            'cpu_load_1min': 0.0,
+            'cpu_temp': 0.0,
             'client_connected': False,
             'last_client_seen': 0
         }
@@ -93,7 +93,9 @@ class RiderMQTT:
             'server_status': 'rider/server/status',
             'image_capture_request': 'rider/control/image_capture',
             'image_capture_response': 'rider/response/image_capture',
-            'movement_response': 'rider/response/movement'
+            'movement_response': 'rider/response/movement',
+            'voice_control': 'rider/voice/control',
+            'voice_status': 'rider/voice/status'
         }
         
         # Publishing thread
@@ -347,7 +349,8 @@ class RiderMQTT:
                 self.__topics['control_system'],
                 self.__topics['client_heartbeat'],
                 self.__topics['client_disconnect'],
-                self.__topics['image_capture_request']
+                self.__topics['image_capture_request'],
+                self.__topics['voice_control']
             ]
             
             for topic in control_topics:
@@ -355,11 +358,17 @@ class RiderMQTT:
                 if self.__debug:
                     print(f"Subscribed to: {topic}")
             
-            # Reset client activity tracking
-            self.__last_client_activity = time.time()
+            # Set startup speaker volume to a known audible level
+            import subprocess as _sp
+            _sp.run(['amixer', '-c', 'wm8960soundcard', 'set', 'Speaker', '120'],
+                    check=False, stderr=_sp.DEVNULL)
+
+            # Reset client activity tracking — client_connected stays False until
+            # a real PC client message arrives (heartbeat, command, etc.)
+            self.__last_client_activity = 0  # Forces timeout to fire quickly
             self.__inactive_client_safety_triggered = False
-            self.__robot_state['client_connected'] = True
-            self.__robot_state['connection_status'] = 'connected'
+            self.__robot_state['client_connected'] = False
+            self.__robot_state['connection_status'] = 'waiting_for_client'
         else:
             if self.__debug:
                 print(f"MQTT 5.0 connection failed with reason code: {reason_code}")
@@ -385,6 +394,13 @@ class RiderMQTT:
             # Update client activity time for any message
             self.__last_client_activity = time.time()
             self.__robot_state['last_client_seen'] = self.__last_client_activity
+            first_message = not self.__robot_state.get('client_connected', False)
+            if first_message:
+                self.__robot_state['client_connected'] = True
+                self.__robot_state['connection_status'] = 'connected'
+                self.__inactive_client_safety_triggered = False
+                # Publish full state immediately so client doesn't wait for next timer tick
+                threading.Thread(target=self.__publish_all_immediately, daemon=True).start()
             
             if self.__debug:
                 print(f"MQTT message received - Topic: {topic}, Payload: {payload}")
@@ -405,6 +421,8 @@ class RiderMQTT:
                     self.__handle_client_disconnect(payload)
                 elif topic == self.__topics['image_capture_request']:
                     self.__handle_image_capture_request(payload)
+                elif topic == self.__topics['voice_control']:
+                    self.__handle_voice_control(payload)
             except Exception as handler_error:
                 if self.__debug:
                     print(f"⚠️ Error in message handler for {topic}: {handler_error}")
@@ -438,7 +456,8 @@ class RiderMQTT:
         # Trigger immediate safety stop
         self.__stop_robot_movement()
         
-        # Update connection status
+        # Update connection status - reset activity timer so is_client_connected() returns False immediately
+        self.__last_client_activity = 0
         self.__robot_state['client_connected'] = False
         self.__robot_state['connection_status'] = 'client_disconnected'
         
@@ -528,53 +547,12 @@ class RiderMQTT:
             turn_thread.start()
         
         elif action == 'speak':
-            # Text-to-speech command
+            # Forward TTS to rider_voice.py via MQTT so it can pause recording first
             text = payload.get('text', '')
-            print(f'[MQTT-TTS] Received speak command: {text}')
-            with open('/tmp/tts_debug.log', 'a') as f:
-                import datetime
-                f.write(f'{datetime.datetime.now()} - Speak command: {text}\n')
-            
-            if self.__debug:
-                print(f"   🔊 Speaking: {text}")
-            
-            # Execute TTS in background thread to avoid blocking
-            def speak_text():
-                import datetime
-                with open('/tmp/tts_execution.log', 'a') as log:
-                    log.write(f'{datetime.datetime.now()} - Starting speak_text() for text: {text}\n')
-                    log.flush()
-                try:
-                    print(f'[MQTT-TTS] About to call espeak for: {text}')
-                    with open('/tmp/tts_execution.log', 'a') as log:
-                        log.write(f'About to run espeak command\n')
-                        log.flush()
-
-                    # Run espeak (subprocess now properly imported!)
-                    result = subprocess.run(['espeak', '-v', 'en', text],
-                                          check=False,
-                                          stderr=subprocess.DEVNULL)
-                    returncode = result.returncode
-
-                    with open('/tmp/tts_execution.log', 'a') as log:
-                        log.write(f'espeak completed - returncode: {returncode}\n')
-                        log.flush()
-                    print(f'[MQTT-TTS] espeak completed with code {returncode}')
-                except subprocess.TimeoutExpired:
-                    with open('/tmp/tts_execution.log', 'a') as log:
-                        log.write(f'espeak TIMEOUT after 10 seconds\n')
-                        log.flush()
-                    print(f'[MQTT-TTS] espeak timed out')
-                except Exception as e:
-                    print(f'[MQTT-TTS] TTS error: {e}')
-                    with open('/tmp/tts_execution.log', 'a') as log:
-                        log.write(f'Error: {e}\n')
-                        log.flush()
-                    import traceback
-                    traceback.print_exc()
-            
-            tts_thread = threading.Thread(target=speak_text, daemon=True)
-            tts_thread.start()
+            if text:
+                if self.__debug:
+                    print(f"   🔊 TTS: {text}")
+                self.__publish_json('rider/voice/speak', {'text': text})
         
         else:
             if self.__debug:
@@ -825,10 +803,23 @@ class RiderMQTT:
                         if self.__debug:
                             print(f"   ⚠️  Body tilt ignored - roll balance is enabled")
                 
+                elif action == 'set_volume':
+                    # value is 0-100; map to WM8960 Speaker range 80-127
+                    # (below 80 is near-silent on WM8960, so map full slider to audible range)
+                    pct = max(0, min(100, int(payload.get('value', 80))))
+                    hw_val = 80 + int(pct * 47 / 100)
+                    import subprocess
+                    subprocess.run(
+                        ['amixer', '-c', 'wm8960soundcard', 'set', 'Speaker', str(hw_val)],
+                        check=False, stderr=subprocess.DEVNULL
+                    )
+                    if self.__debug:
+                        print(f'   🔊 Volume set to {pct}% (hw {hw_val}/127)')
+
                 # For height/tilt changes, don't publish status immediately to avoid delays
                 # The periodic status updates will reflect the changes within 2 seconds
                 # Only publish for mode changes that need immediate UI feedback
-                if action not in ['change_height', 'change_body_tilt']:
+                if action not in ['change_height', 'change_body_tilt', 'set_volume']:
                     # Publish updated status after settings change
                     self.__publish_status()
                 
@@ -861,6 +852,19 @@ class RiderMQTT:
         if 'camera' in self.__command_callbacks:
             self.__command_callbacks['camera'](payload)
     
+
+    def __handle_voice_control(self, payload: Dict[str, Any]):
+        """Handle voice enable/disable from PC client."""
+        enabled = payload.get('enabled', True)
+        if self.__debug:
+            print(f"Voice control: {'enable' if enabled else 'disable'}")
+        if 'voice_control' in self.__command_callbacks:
+            self.__command_callbacks['voice_control'](enabled)
+
+    def publish_voice_enabled(self, enabled: bool):
+        """Publish voice enabled/disabled state to PC client."""
+        self.__publish_json(self.__topics['voice_status'], {'enabled': enabled})
+
     def __handle_image_capture_request(self, payload: Dict[str, Any]):
         """Handle image capture requests"""
         request_id = payload.get('request_id', f"img_{int(time.time())}")
@@ -1105,7 +1109,9 @@ class RiderMQTT:
                 # Sample CPU usage periodically (non-blocking after first call)
                 # This keeps the CPU data fresh for status publishing
                 try:
-                    psutil.cpu_percent(interval=None)  # Non-blocking sample
+                    cpu_sample = psutil.cpu_percent(interval=None)  # Non-blocking sample
+                    if cpu_sample is not None:
+                        self.__robot_state['cpu_percent'] = cpu_sample
                 except:
                     pass
                 
@@ -1147,7 +1153,7 @@ class RiderMQTT:
             'height': self.__robot_state['height'],
             'connection_status': self.__robot_state['connection_status'],
             'cpu_percent': self.__robot_state['cpu_percent'],
-            'cpu_load_1min': self.__robot_state['cpu_load_1min'],
+            'cpu_temp': self.__robot_state['cpu_temp'],
             'battery_level': self.__robot_state['battery_level']  # Battery percentage (0-100%)
         }
         
@@ -1308,33 +1314,45 @@ class RiderMQTT:
             return None
     
     def __get_cpu_data(self):
-        """Read current CPU usage and load average data"""
+        """Read current CPU usage and temperature"""
         try:
-            # Get CPU usage with small interval for stable readings
-            # interval=0.1 gives accurate readings without blocking too long
-            self.__robot_state['cpu_percent'] = psutil.cpu_percent(interval=0.1)
-            
-            # Get load average (1 minute only)
-            load_avg = os.getloadavg()
-            self.__robot_state['cpu_load_1min'] = load_avg[0]
-            
+            # cpu_percent is already sampled every 0.1s in __publishing_loop
+            # Do NOT call psutil.cpu_percent() here — a second back-to-back call
+            # measures a near-zero interval and returns 0 or 100 (noise).
+
+            # Read CPU temperature from thermal zone
+            with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+                self.__robot_state['cpu_temp'] = int(f.read().strip()) / 1000.0
+
             if self.__debug:
-                print(f"📊 CPU: {self.__robot_state['cpu_percent']:.1f}%, Load: {self.__robot_state['cpu_load_1min']:.2f}")
-                
+                print(f"📊 CPU: {self.__robot_state['cpu_percent']:.1f}%, Temp: {self.__robot_state['cpu_temp']:.1f}°C")
+
         except Exception as e:
             if self.__debug:
                 print(f"⚠️  MQTT: Error reading CPU data: {e}")
-            # Set default values on error
-            self.__robot_state['cpu_percent'] = 0.0
-            self.__robot_state['cpu_load_1min'] = 0.0
+            self.__robot_state['cpu_temp'] = 0.0
+
+    def __publish_all_immediately(self):
+        """Publish full status and IMU immediately when a new client connects."""
+        time.sleep(0.3)  # Brief pause to let client finish subscribing
+        self.__get_cpu_data()
+        self.__publish_status()
+        self.__publish_imu_data()
+
+    def is_client_connected(self) -> bool:
+        """Return whether a PC client is currently connected.
+        Uses recency of last message rather than the flag to avoid race conditions."""
+        if self.__last_client_activity == 0:
+            return False
+        return (time.time() - self.__last_client_activity) < self.__connection_timeout
 
     def get_cpu_load_data(self):
-        """Public method to get current CPU and Load data for screen display
-        Returns: tuple (cpu_percent, cpu_load_1min)
+        """Public method to get current CPU and Temp data for screen display
+        Returns: tuple (cpu_percent, cpu_temp)
         """
         return (
             self.__robot_state.get('cpu_percent', 0.0),
-            self.__robot_state.get('cpu_load_1min', 0.0)
+            self.__robot_state.get('cpu_temp', 0.0)
         )
 
     def __publish_json(self, topic: str, data: Dict[str, Any]):

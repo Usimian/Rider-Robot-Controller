@@ -45,6 +45,7 @@ class RiderScreen:
         self.__roll_balance_enabled = False
         self.__performance_mode_enabled = False
         self.__camera_enabled = False
+        self.__voice_enabled = True
         
         # Odometry/IMU data
         self.__roll = 0.0
@@ -66,7 +67,7 @@ class RiderScreen:
         self.__reset_failure_count_threshold = 10  # Reset failure counters after 10 successful reads
         
         # CPU load data (will be fetched from MQTT client)
-        self.__cpu_load_1min = 0.0
+        self.__cpu_temp = 0.0
         self.__cpu_percent = 0.0
 
         # Video settings
@@ -309,38 +310,33 @@ class RiderScreen:
         cpu_text = f"CPU {self.__cpu_percent:.0f}%"
         self.__draw_text(x + bar_width + 5, y - 2, cpu_text, cpu_color, self.__font_small)
         
-        # Load Bar (positioned below CPU bar)
-        load_y = y + bar_height + 5  # 5 pixels spacing between bars
-        
-        # Calculate fill percentage (0.0 to 4.0 maps to 0% to 100%)
-        load_ratio = min(self.__cpu_load_1min / 4.0, 1.0)  # Cap at 100%
-        load_fill_width = int(bar_width * load_ratio)
-        
-        # Determine load color based on load level
-        if self.__cpu_load_1min < 1.0:
-            load_color = self.__color_green
-        elif self.__cpu_load_1min < 3.0:
-            load_color = self.__color_yellow
+        # Temperature bar (positioned below CPU bar)
+        temp_y = y + bar_height + 5
+
+        temp_ratio = min(self.__cpu_temp / 100.0, 1.0)
+        temp_fill_width = int(bar_width * temp_ratio)
+
+        if self.__cpu_temp >= 75:
+            temp_color = self.__color_red
+        elif self.__cpu_temp >= 60:
+            temp_color = self.__color_yellow
         else:
-            load_color = self.__color_red
-        
-        # Draw load bar outline
-        self.__draw_rect(x, load_y, bar_width, bar_height, self.__color_white, filled=False)
-        
-        # Draw load filled portion
-        if load_fill_width > 0:
-            self.__draw_rect(x + 1, load_y + 1, load_fill_width - 2, bar_height - 2, load_color, filled=True)
-        
-        # Draw load value text next to bar
-        load_text = f"Load {self.__cpu_load_1min:.2f}"
-        self.__draw_text(x + bar_width + 5, load_y - 2, load_text, load_color, self.__font_small)
+            temp_color = self.__color_green
+
+        self.__draw_rect(x, temp_y, bar_width, bar_height, self.__color_white, filled=False)
+
+        if temp_fill_width > 0:
+            self.__draw_rect(x + 1, temp_y + 1, temp_fill_width - 2, bar_height - 2, temp_color, filled=True)
+
+        temp_text = f"T {self.__cpu_temp:.0f}C"
+        self.__draw_text(x + bar_width + 5, temp_y - 2, temp_text, temp_color, self.__font_small)
     
     def __read_cpu_data(self):
         """Read CPU load and usage data"""
         try:
             # Get CPU and Load data from MQTT client (single source of truth)
             if self.__mqtt_client:
-                self.__cpu_percent, self.__cpu_load_1min = self.__mqtt_client.get_cpu_load_data()
+                self.__cpu_percent, self.__cpu_temp = self.__mqtt_client.get_cpu_load_data()
             else:
                 # Fallback if MQTT client not available
                 self.__cpu_percent = 0.0
@@ -377,7 +373,19 @@ class RiderScreen:
         
         # Controller status icon (upper left)
         self.__draw_controller_icon(10, 10)
-        
+
+        # Voice indicator (just right of controller icon)
+        # Gray if PC client is not connected (voice commands need the client)
+        client_connected = self.__mqtt_client.is_client_connected() if self.__mqtt_client else False
+        if not client_connected:
+            voice_color = self.__color_gray
+        elif self.__voice_enabled:
+            voice_color = self.__color_green
+        else:
+            voice_color = self.__color_red
+        self.__draw_circle(47, 18, 5, voice_color, filled=True)
+        self.__draw_text(54, 11, "MIC", voice_color, self.__font_small)
+
         # Battery indicator (upper right) - small icon
         self.__draw_battery_indicator(235, 15, self.__battery_level)
         
@@ -459,6 +467,12 @@ class RiderScreen:
         self.__camera_enabled = bool(enabled)
         if self.__debug:
             print(f"Camera updated: {'ON' if self.__camera_enabled else 'OFF'}")
+
+    def update_voice_status(self, enabled):
+        """Update the voice control status"""
+        self.__voice_enabled = bool(enabled)
+        if self.__debug:
+            print(f"Voice updated: {'ON' if self.__voice_enabled else 'OFF'}")
     
     def update_status(self, status):
         """Update the robot status"""

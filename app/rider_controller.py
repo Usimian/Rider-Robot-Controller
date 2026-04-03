@@ -10,7 +10,7 @@ import os
 import sys
 import time
 import pygame
-from xgo_toolkit import XGO
+from xgolib import XGO
 from rider_screen import RiderScreen
 from rider_video import RiderVideo
 from rider_mqtt import RiderMQTT
@@ -64,6 +64,9 @@ class BluetoothController_Rider(object):
         # Camera state (will be set to True if camera is available during setup)
         self.__camera_enabled = False
         self.__video = None
+
+        # Voice process
+        self.__voice_process = None
         
         # Button states
         self.__button_states = {}
@@ -100,7 +103,11 @@ class BluetoothController_Rider(object):
         self.__mqtt_update_interval = 1.0  # Update MQTT state every second
         
         # Add button reader
-        self.__robot_button = Button()  # Screen button reader for the robot
+        try:
+            self.__robot_button = Button()  # Screen button reader for the robot
+        except Exception as e:
+            print(f"Warning: Button GPIO not available: {e}")
+            self.__robot_button = None
 
         # Always try to initialize the screen, regardless of controller status
         try:
@@ -159,17 +166,22 @@ class BluetoothController_Rider(object):
             import threading
             def say_hello():
                 try:
-                    subprocess.run(['espeak', '-v', 'en', 'Hello, I am ready'], check=False, stderr=subprocess.DEVNULL)
+                    subprocess.run(['espeak-ng', '-v', 'en', '-s', '150', '-w', '/tmp/_tts.wav', 'Hello, I am ready'], check=False, stderr=subprocess.DEVNULL)
+                    subprocess.run(['aplay', '-D', 'plughw:wm8960soundcard,0', '/tmp/_tts.wav'], check=False, stderr=subprocess.DEVNULL)
                 except:
                     pass
             threading.Thread(target=say_hello, daemon=True).start()
         except:
             pass
+
+        # Start voice recognition service
+        self.__start_voice()
     
     def __setup_pygame(self):
         """Initialize pygame with robust controller detection (integrated from rider_screen.py)"""
         try:
             pygame.init()
+            pygame.mixer.quit()  # Release audio device - TTS uses aplay directly
             pygame.joystick.init()
             
             # PYGAME 2.6.1 FIX - Force refresh joystick detection
@@ -288,6 +300,7 @@ class BluetoothController_Rider(object):
             self.__mqtt_client.set_command_callback('camera', self.__handle_mqtt_camera)
             self.__mqtt_client.set_command_callback('system', self.__handle_mqtt_system)
             self.__mqtt_client.set_command_callback('image_capture', self.__handle_mqtt_image_capture)
+            self.__mqtt_client.set_command_callback('voice_control', self.__handle_mqtt_voice_control)
             
             # Connect to MQTT broker
             if self.__mqtt_client.connect():
@@ -965,7 +978,17 @@ class BluetoothController_Rider(object):
             
         elif self.__robot_button.press_d():   # D button is on the upper right side of the screen
             print("Robot Button D pressed!")
-            # Add your functionality here
+            # Toggle voice control
+            voice_on = self.__voice_process is not None and self.__voice_process.poll() is None
+            new_state = not voice_on
+            if voice_on:
+                self.__stop_voice()
+            else:
+                self.__start_voice()
+            if self.__screen:
+                self.__screen.update_voice_status(new_state)
+            if self.__mqtt_client:
+                self.__mqtt_client.publish_voice_enabled(new_state)
 
     def start_control_loop(self):
         """Start the main control loop"""
@@ -1291,9 +1314,49 @@ class BluetoothController_Rider(object):
             self.__robot.rider_turn(0)
         print("Controller stopped")
     
+
+    def __handle_mqtt_voice_control(self, enabled: bool):
+        """Start or stop voice recognition based on PC client toggle."""
+        if enabled:
+            if self.__voice_process is None or self.__voice_process.poll() is not None:
+                self.__start_voice()
+        else:
+            self.__stop_voice()
+        if self.__screen:
+            self.__screen.update_voice_status(enabled)
+
+    def __start_voice(self):
+        """Launch rider_voice.py as a subprocess."""
+        import subprocess, os, sys
+        try:
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rider_voice.py')
+            python = os.path.join(os.path.dirname(sys.executable), 'python3')
+            self.__voice_process = subprocess.Popen(
+                [python, script],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            print(f'Voice recognition started (PID {self.__voice_process.pid})')
+        except Exception as e:
+            print(f'Failed to start voice: {e}')
+            self.__voice_process = None
+
+    def __stop_voice(self):
+        """Terminate the voice recognition subprocess."""
+        if self.__voice_process and self.__voice_process.poll() is None:
+            self.__voice_process.terminate()
+            try:
+                self.__voice_process.wait(timeout=3)
+            except Exception:
+                self.__voice_process.kill()
+            print('Voice recognition stopped')
+        self.__voice_process = None
+
     def cleanup(self):
         """Clean up resources"""
         self.stop()
+
+        # Stop voice recognition
+        self.__stop_voice()
         
         # Clean up camera first
         if self.__video:
@@ -1362,7 +1425,7 @@ if __name__ == "__main__":
     
     print("🤖 Initializing XGO-RIDER robot...")
     try:
-        robot = XGO(port='/dev/ttyS0', version="xgorider")
+        robot = XGO(port='/dev/ttyAMA0', version="xgorider")
         print("✅ Robot connected successfully!")
         
         # Read and display firmware and library versions

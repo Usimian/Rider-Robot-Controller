@@ -14,7 +14,7 @@ import pyaudio
 from threading import Thread
 import subprocess
 import tempfile
-from xgo_toolkit import XGO
+from xgolib import XGO
 from rider_screen import RiderScreen
 from key import Button
 
