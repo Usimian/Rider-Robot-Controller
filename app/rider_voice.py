@@ -23,6 +23,7 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC_VOICE = "rider/voice/recognized"
 MQTT_TOPIC_SPEAK = "rider/voice/speak"
+MQTT_TOPIC_STOP  = "rider/voice/stop"
 MQTT_TOPIC_STATUS = "rider/voice/status"
 HARDWARE_SAMPLE_RATE = 44100  # wm8960 hardware rate
 CHANNELS = 2                   # wm8960 requires stereo (Vosk will use 1 channel)
@@ -40,6 +41,7 @@ class VoiceListener:
         # TTS coordination: set event to pause recording and speak
         self.tts_event = threading.Event()
         self.tts_text = ""
+        self._tts_proc = None   # active aplay process (so we can kill it)
 
     def initialize(self):
         """Initialize Vosk model and MQTT connection"""
@@ -73,12 +75,13 @@ class VoiceListener:
         if rc == 0:
             print("[Voice] Connected to MQTT broker")
             client.subscribe(MQTT_TOPIC_SPEAK)
-            print(f"[Voice] Subscribed to {MQTT_TOPIC_SPEAK}")
+            client.subscribe(MQTT_TOPIC_STOP)
+            print(f"[Voice] Subscribed to {MQTT_TOPIC_SPEAK} and {MQTT_TOPIC_STOP}")
         else:
             print(f"[Voice] Failed to connect to MQTT, return code {rc}")
 
     def _on_mqtt_message(self, client, userdata, msg):
-        """Handle incoming MQTT messages (TTS requests)"""
+        """Handle incoming MQTT messages (TTS requests and stop)"""
         try:
             if msg.topic == MQTT_TOPIC_SPEAK:
                 payload = json.loads(msg.payload.decode())
@@ -86,6 +89,9 @@ class VoiceListener:
                 if text:
                     print(f"[Voice] TTS requested: '{text}'")
                     self.speak(text)
+            elif msg.topic == MQTT_TOPIC_STOP:
+                print("[Voice] Stop TTS received")
+                self.stop_tts()
         except Exception as e:
             print(f"[Voice] Error handling message: {e}")
 
@@ -154,6 +160,18 @@ class VoiceListener:
         self.tts_text = text
         self.tts_event.set()
 
+    def stop_tts(self) -> None:
+        """Kill any ongoing TTS playback immediately."""
+        proc = self._tts_proc
+        if proc and proc.poll() is None:
+            proc.kill()
+        self._tts_proc = None
+        self.tts_text = ""
+        self.tts_event.clear()
+        # Belt-and-suspenders: kill any stray espeak/aplay processes
+        subprocess.run(['pkill', '-f', 'espeak-ng'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-f', 'aplay.*wm8960'], stderr=subprocess.DEVNULL)
+
     def _do_tts(self, text: str):
         """Execute TTS synchronously (call only when audio device is free)."""
         print(f"[Voice] Speaking: '{text}'")
@@ -162,12 +180,15 @@ class VoiceListener:
                 ['espeak-ng', '-v', 'en', '-s', '150', '-w', '/tmp/_tts.wav', text],
                 check=False, stderr=subprocess.DEVNULL
             )
-            subprocess.run(
+            self._tts_proc = subprocess.Popen(
                 ['aplay', '-D', 'plughw:wm8960soundcard,0', '/tmp/_tts.wav'],
-                check=False, stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL
             )
+            self._tts_proc.wait()
+            self._tts_proc = None
         except Exception as e:
             print(f'[Voice] TTS error: {e}')
+            self._tts_proc = None
 
     def _drain_queue(self):
         while not self.audio_queue.empty():
@@ -260,6 +281,7 @@ class VoiceListener:
         """Stop the voice listener"""
         print("[Voice] Stopping voice recognition...")
         self.running = False
+        self.stop_tts()
         if self.mqtt_client:
             self.mqtt_client.loop_stop()
             self.mqtt_client.disconnect()

@@ -149,7 +149,7 @@ class RiderVideo:
                     if arr is None:
                         consecutive_failures += 1
                         continue
-                    pil_frame = Image.fromarray(arr).resize(
+                    pil_frame = Image.fromarray(arr[:, :, ::-1]).resize(
                         (self.__frame_width, self.__frame_height), Image.Resampling.BILINEAR)
                 elif CV2_AVAILABLE and cv2 is not None and self.__camera:
                     ret, frame = self.__camera.read()
@@ -204,7 +204,7 @@ class RiderVideo:
             tw, th = self.__get_target_resolution(resolution)
             if self.__use_picamera2 and self.__picam:
                 arr = self.__picam.capture_array()
-                pil_image = Image.fromarray(arr).resize((tw, th), Image.Resampling.LANCZOS)
+                pil_image = Image.fromarray(arr[:, :, ::-1]).resize((tw, th), Image.Resampling.LANCZOS)
             elif CV2_AVAILABLE and cv2 is not None and self.__camera:
                 ret, frame = self.__camera.read()
                 if not ret or frame is None:
