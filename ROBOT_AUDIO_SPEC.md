@@ -36,7 +36,7 @@ def handle_movement_command(msg):
 
     if action == 'speak':
         text = msg.get('text', '')
-        tts(text)  # Use existing TTS function from demos
+        tts(text)  # see the tts() implementation below
 
     elif action == 'move':
         # ... existing move handling
@@ -56,11 +56,7 @@ tts("Hello")
 ```
 
 ### 3. TTS Function
-Use existing TTS implementation from demos. Recommended sources:
-- `demos/gpt_utils.py` - `tts()` function (line ~474)
-- `demos/gpt_free_en.py` - `tts()` function (line ~268)
-
-Example implementation:
+A self-contained implementation (no external SDK required):
 ```python
 def tts(content):
     """Text-to-speech using system TTS"""

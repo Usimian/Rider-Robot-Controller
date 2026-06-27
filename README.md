@@ -89,11 +89,6 @@ Rider-Robot-Controller/
 │   ├── MQTT_Protocol_Documentation.md
 │   ├── README_Bluetooth_Controller.md
 │   └── README_AUDIO_TESTS.md
-├── demos/                        # 100+ AI demo programs
-│   ├── face/                     # Face detection demos
-│   ├── object_detection/         # YOLO models
-│   ├── myyolofast.py            # Real-time object detection
-│   └── [100+ other demos]
 ├── yolostream.py                 # YOLO inference pipeline
 ├── firmware/                     # Robot firmware files
 ├── tools/                        # Compilation and testing utilities
@@ -172,15 +167,6 @@ Send commands over the network using MQTT topics:
 - `/rider/status`: Receive real-time status updates
 - `/rider/image_request`: Request camera captures
 - See `app/MQTT_Protocol_Documentation.md` for full protocol
-
-### AI Demos
-Explore the 100+ demo programs in the `demos/` directory:
-```bash
-cd demos
-python myyolofast.py  # Object detection
-python face/face_detect.py  # Face detection
-# ... and many more
-```
 
 ## MQTT Communication
 
